@@ -38,6 +38,9 @@ public class OutDocumentProcessorServiceImpl implements OutDocumentProcessorServ
         if (files == null) return;
         int count = 0;
         for (File file : files) {
+            if (file == null || !file.exists() || !file.isFile()) {
+                continue;
+            }
             String path = file.getPath();
             try {
                 String content = FileUtils.fileToString(file);
@@ -46,6 +49,15 @@ public class OutDocumentProcessorServiceImpl implements OutDocumentProcessorServ
                 count++;
                 log.info("[OutDocumentProcessor] Fichier .ack recu traité → VirementRecu + MessageRecu créés → SAVE_SAA : {}", file.getName());
             } catch (Exception e) {
+                if (isIgnorableOutSaaError(e)) {
+                    log.warn("[OutDocumentProcessor] Fichier .ack recu ignoré (cas fonctionnel) → SAVE_SAA : {} : {}", path, e.getMessage());
+                    try {
+                        FileUtils.moveToSave(path);
+                    } catch (IOException io) {
+                        log.error("[OutDocumentProcessor] Impossible de déplacer vers SAVE_SAA : {}", io.getMessage());
+                    }
+                    continue;
+                }
                 log.error("[OutDocumentProcessor] Erreur fichier .ack recu → ERREUR_SAA : {} : {}", path, e.getMessage());
                 try {
                     FileUtils.moveToRejet(path);
@@ -70,6 +82,9 @@ public class OutDocumentProcessorServiceImpl implements OutDocumentProcessorServ
         if (files == null) return;
         int count = 0;
         for (File file : files) {
+            if (file == null || !file.exists() || !file.isFile()) {
+                continue;
+            }
             String path = file.getPath();
             try {
                 String content = FileUtils.fileToString(file);
@@ -78,6 +93,15 @@ public class OutDocumentProcessorServiceImpl implements OutDocumentProcessorServ
                 count++;
                 log.info("[OutDocumentProcessor] Fichier .xml SOP recu traité → statut VirementRecu mis à jour → SAVE_SOP : {}", file.getName());
             } catch (Exception e) {
+                if (isIgnorableOutSopError(e)) {
+                    log.warn("[OutDocumentProcessor] Fichier .xml SOP recu ignoré (aucune correspondance) → SAVE_SOP : {} : {}", path, e.getMessage());
+                    try {
+                        FileUtils.moveToSave(path);
+                    } catch (IOException io) {
+                        log.error("[OutDocumentProcessor] Impossible de déplacer vers SAVE_SOP : {}", io.getMessage());
+                    }
+                    continue;
+                }
                 log.error("[OutDocumentProcessor] Erreur fichier .xml SOP recu → ERREUR_SOP : {} : {}", path, e.getMessage());
                 try {
                     FileUtils.moveToRejet(path);
@@ -89,5 +113,21 @@ public class OutDocumentProcessorServiceImpl implements OutDocumentProcessorServ
         if (count > 0) {
             log.info("[OutDocumentProcessor] {} fichier(s) .xml SOP traités dans {}", count, directoryPath);
         }
+    }
+
+    private boolean isIgnorableOutSaaError(Exception e) {
+        if (e == null || e.getMessage() == null) {
+            return false;
+        }
+        String msg = e.getMessage().toLowerCase();
+        return msg.contains("type de message mx non supporté dans .ack recu");
+    }
+
+    private boolean isIgnorableOutSopError(Exception e) {
+        if (e == null || e.getMessage() == null) {
+            return false;
+        }
+        String msg = e.getMessage().toLowerCase();
+        return msg.contains("aucune référence trouvée ne correspond à un virementrecu en base");
     }
 }

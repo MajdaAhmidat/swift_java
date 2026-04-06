@@ -12,21 +12,15 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Scheduler qui surveille en continu deux dossiers distincts :
- * - IN_SOP : fichiers SOP (.xml) à traiter et enregistrer en base
- * - IN_SAA : fichiers SAA (.ack) à traiter pour mettre à jour statut_swift
- *
- * Base des chemins : user.dir, ou user.dir/swift_fin si l'IDE lance depuis le dossier père
- * (ex. monitoring) car alors user.dir = dossier père et les dossiers sont dans swift_fin.
- */
 @Component
 public class MxAckScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(MxAckScheduler.class);
 
     private final DocumentProcessorService documentProcessorService;
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     public MxAckScheduler(DocumentProcessorService documentProcessorService) {
         this.documentProcessorService = documentProcessorService;
@@ -37,6 +31,11 @@ public class MxAckScheduler {
      */
     @Scheduled(initialDelayString = "${batch.poll.initial.delay.ms:3000}", fixedDelayString = "${batch.poll.delay.ms:10000}")
     public void pollInputDirectories() {
+        if (!running.compareAndSet(false, true)) {
+            log.warn("[MxAckScheduler] Polling ignoré: un traitement est déjà en cours");
+            return;
+        }
+        try {
         String baseDir = getBaseDirectory();
         log.info("[MxAckScheduler] Polling des dossiers (base={})", baseDir);
 
@@ -58,6 +57,9 @@ public class MxAckScheduler {
             ackDirs = toAbsolutePaths(ackDirs, baseDir);
             log.info("[MxAckScheduler] Traitement SAA .ack dans: {}", ackDirs);
             documentProcessorService.processDocuments(ackDirs, MessageStandardType.MX);
+        }
+        } finally {
+            running.set(false);
         }
     }
 

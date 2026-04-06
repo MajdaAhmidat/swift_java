@@ -99,9 +99,9 @@ public class VirementRecu {
     @JoinColumn(name = "code_bic", referencedColumnName = "code_bic", insertable = false, updatable = false)
     private Bic bic;
 
-    /** MESSAGE_RECU has_one VIREMENT_RECU => VIREMENT_RECU has_one MESSAGE_RECU */
-    @OneToOne(mappedBy = "virementRecu", cascade = CascadeType.ALL, orphanRemoval = true)
-    private MessageRecu messageRecu;
+    /** VIREMENT_RECU peut être référencé par plusieurs MESSAGE_RECU. */
+    @OneToMany(mappedBy = "virementRecu", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<MessageRecu> messagesRecus = new ArrayList<>();
 
     /** VIREMENT_RECU has_many VIREMENT_RECU_HISTO */
     @OneToMany(mappedBy = "virementRecu", cascade = CascadeType.ALL, orphanRemoval = true)
@@ -165,8 +165,8 @@ public class VirementRecu {
     public void setAdresse(Adresse adresse) { this.adresse = adresse; }
     public Bic getBic() { return bic; }
     public void setBic(Bic bic) { this.bic = bic; }
-    public MessageRecu getMessageRecu() { return messageRecu; }
-    public void setMessageRecu(MessageRecu messageRecu) { this.messageRecu = messageRecu; }
+    public List<MessageRecu> getMessagesRecus() { return messagesRecus; }
+    public void setMessagesRecus(List<MessageRecu> messagesRecus) { this.messagesRecus = messagesRecus; }
     public List<VirementRecuHisto> getVirementsRecuHisto() { return virementsRecuHisto; }
     public void setVirementsRecuHisto(List<VirementRecuHisto> virementsRecuHisto) { this.virementsRecuHisto = virementsRecuHisto; }
 

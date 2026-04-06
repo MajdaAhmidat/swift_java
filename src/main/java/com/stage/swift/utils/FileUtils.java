@@ -41,6 +41,10 @@ public final class FileUtils {
 
     public static void moveToSave(String filePath) throws IOException {
         Path sourcePath = Paths.get(filePath);
+        if (!Files.exists(sourcePath)) {
+            // Fichier déjà déplacé par un autre thread/passsage: ignorer sans erreur.
+            return;
+        }
         Path targetPath = buildTargetPath(filePath, true);
         Files.createDirectories(targetPath.getParent());
         Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
@@ -48,15 +52,17 @@ public final class FileUtils {
 
     public static void moveToRejet(String filePath) throws IOException {
         Path sourcePath = Paths.get(filePath);
+        if (!Files.exists(sourcePath)) {
+            // Si le fichier n'existe plus (déjà déplacé ou supprimé), on considère
+            // le déplacement en rejet comme inutile et on ne lève pas d'exception.
+            return;
+        }
         Path targetPath = buildTargetPath(filePath, false);
         Files.createDirectories(targetPath.getParent());
         Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
     }
 
-    /**
-     * Déplace le fichier vers le répertoire cible (ex. IN_ACK après traitement SOP).
-     * Crée le répertoire s'il n'existe pas.
-     */
+
     public static void moveToDirectory(String filePath, String targetDirPath) throws IOException {
         Path sourcePath = Paths.get(filePath);
         Path targetDir = Paths.get(targetDirPath);
@@ -65,9 +71,7 @@ public final class FileUtils {
         Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
     }
 
-    /**
-     * Déplace le fichier vers le répertoire cible en changeant l'extension (ex. .xml → .ack pour IN_ACK).
-     */
+
     public static void moveToDirectoryWithExtension(String filePath, String targetDirPath, String newExtension) throws IOException {
         Path sourcePath = Paths.get(filePath);
         Path targetDir = Paths.get(targetDirPath);
@@ -80,11 +84,7 @@ public final class FileUtils {
         Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
     }
 
-    /**
-     * Construit le chemin cible pour un déplacement en SAVE_* ou ERREUR_* selon le type de dossier :
-     * - IN_SOP / OUT_SOP → SAVE_SOP ou ERREUR_SOP
-     * - IN_SAA / OUT_SAA → SAVE_SAA ou ERREUR_SAA
-     */
+
     private static Path buildTargetPath(String filePath, boolean success) {
         Path sourcePath = Paths.get(filePath);
         Path parent = sourcePath.getParent();

@@ -8,9 +8,7 @@ package com.stage.swift.service.mx;
  */
 public interface AckService {
 
-    /**
-     * Traite un fichier / contenu .ack complet (peut contenir un ou plusieurs Saa:DataPDU).
-     */
+
     void processAckFile(String ackContent);
 }
 

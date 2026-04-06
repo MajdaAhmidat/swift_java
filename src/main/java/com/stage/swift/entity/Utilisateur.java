@@ -12,21 +12,20 @@ import java.time.OffsetDateTime;
 public class Utilisateur {
 
     @Id
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "utilisateur_seq")
+    @SequenceGenerator(name = "utilisateur_seq", sequenceName = "swift.utilisateur_id_seq", allocationSize = 1)
     @Column(name = "id_user")
     private Integer idUser;
 
     @Id
-    @Column(name = "id_role_role")
+    @Column(name = "id_role")
     private Integer idRoleRole;
 
-    @Column(name = "login", nullable = false, unique = true, length = 100)
+    @Column(name = "email", nullable = false, unique = true, length = 150)
     private String login;
 
     @Column(name = "motdepasse", nullable = false, columnDefinition = "text")
     private String motdepasse;
-
-    @Column(name = "role_id", nullable = false)
-    private Integer roleId;
 
     @Column(name = "actif", nullable = false)
     private Boolean actif = true;
@@ -34,8 +33,26 @@ public class Utilisateur {
     @Column(name = "created_at")
     private OffsetDateTime createdAt;
 
+    @Column(name = "nom", length = 100)
+    private String nom;
+
+    @Column(name = "prenom", length = 100)
+    private String prenom;
+
+    @Column(name = "telephone", length = 50)
+    private String telephone;
+
+    @Column(name = "departement", length = 100)
+    private String departement;
+
+    @Column(name = "poste", length = 100)
+    private String poste;
+
+    @Column(name = "statut", length = 50)
+    private String statut;
+
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "id_role_role", referencedColumnName = "id_role", insertable = false, updatable = false)
+    @JoinColumn(name = "id_role", referencedColumnName = "id_role", insertable = false, updatable = false)
     private Role role;
 
     public Integer getIdUser() {
@@ -70,14 +87,6 @@ public class Utilisateur {
         this.motdepasse = motdepasse;
     }
 
-    public Integer getRoleId() {
-        return roleId;
-    }
-
-    public void setRoleId(Integer roleId) {
-        this.roleId = roleId;
-    }
-
     public Boolean getActif() {
         return actif;
     }
@@ -92,6 +101,54 @@ public class Utilisateur {
 
     public void setCreatedAt(OffsetDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getNom() {
+        return nom;
+    }
+
+    public void setNom(String nom) {
+        this.nom = nom;
+    }
+
+    public String getPrenom() {
+        return prenom;
+    }
+
+    public void setPrenom(String prenom) {
+        this.prenom = prenom;
+    }
+
+    public String getTelephone() {
+        return telephone;
+    }
+
+    public void setTelephone(String telephone) {
+        this.telephone = telephone;
+    }
+
+    public String getDepartement() {
+        return departement;
+    }
+
+    public void setDepartement(String departement) {
+        this.departement = departement;
+    }
+
+    public String getPoste() {
+        return poste;
+    }
+
+    public void setPoste(String poste) {
+        this.poste = poste;
+    }
+
+    public String getStatut() {
+        return statut;
+    }
+
+    public void setStatut(String statut) {
+        this.statut = statut;
     }
 
     public Role getRole() {

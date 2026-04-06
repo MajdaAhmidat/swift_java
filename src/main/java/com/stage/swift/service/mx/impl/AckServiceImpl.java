@@ -33,6 +33,9 @@ public class AckServiceImpl implements AckService {
             throw new IllegalArgumentException("Contenu .ack vide");
         }
         boolean anyUpdated = false;
+        boolean hasPduWithReferences = false;
+        int refsTriedInPdu = 0;
+        int uetrTriedInPdu = 0;
         String[] pdus = ackContent.split("</Saa:DataPDU>");
         for (String pdu : pdus) {
             if (pdu == null || pdu.trim().isEmpty() || pdu.matches("[\\r\\n\\s]+")) continue;
@@ -41,6 +44,8 @@ public class AckServiceImpl implements AckService {
             if (refs == null || refs.isEmpty()) {
                 continue;
             }
+            hasPduWithReferences = true;
+            refsTriedInPdu += refs.size();
             String status = AckHelper.extractStatus(fullPdu);
             for (String ref : refs) {
                 try {
@@ -51,6 +56,23 @@ public class AckServiceImpl implements AckService {
                     log.info("ACK (PDU) : reference={} sans virement, essai référence suivante", ref);
                 }
             }
+            if (!anyUpdated) {
+                List<String> uetrs = AckHelper.extractAllUetrOrdered(fullPdu);
+                uetrTriedInPdu += uetrs.size();
+                for (String uetr : uetrs) {
+                    try {
+                        saveDataAckByUetr(uetr, status);
+                        anyUpdated = true;
+                        break;
+                    } catch (IllegalStateException e) {
+                        log.info("ACK (PDU) : uetr={} sans virement, essai UETR suivant", uetr);
+                    }
+                }
+            }
+        }
+        if (!anyUpdated && hasPduWithReferences) {
+            log.warn("ACK sans correspondance: {} référence(s) et {} UETR testé(s) dans les PDU, aucun VirementEmis trouvé", refsTriedInPdu, uetrTriedInPdu);
+            return;
         }
         // Si aucun bloc Saa:DataPDU valide : traiter tout le fichier comme un seul ACK (ex. XML déplacé en .ack)
         if (!anyUpdated) {
@@ -68,7 +90,16 @@ public class AckServiceImpl implements AckService {
                     log.info("ACK : reference={} sans virement, essai référence suivante", ref);
                 }
             }
-            throw new IllegalStateException("ACK invalide : aucune des " + refs.size() + " référence(s) trouvée(s) ne correspond à un VirementEmis en base");
+            List<String> uetrs = AckHelper.extractAllUetrOrdered(ackContent);
+            for (String uetr : uetrs) {
+                try {
+                    saveDataAckByUetr(uetr, status);
+                    return;
+                } catch (IllegalStateException e) {
+                    log.info("ACK : uetr={} sans virement, essai UETR suivant", uetr);
+                }
+            }
+            log.warn("ACK sans correspondance: {} référence(s) et {} UETR testé(s), aucun VirementEmis trouvé", refs.size(), uetrs.size());
         }
     }
 
@@ -79,7 +110,7 @@ public class AckServiceImpl implements AckService {
     }
 
     /**
-     * Met à jour le statut en base : obligatoirement "ACK" ou "NACK".
+     * Met à jour le statut en base
      * Recherche par référence exacte puis par TRIM si besoin.
      */
     private void saveDataAck(AckDto ackDto) {
@@ -103,13 +134,54 @@ public class AckServiceImpl implements AckService {
             log.warn("ACK : reference={} aucun VirementEmis trouvé (vérifier que la référence du .ack = GrpHdr/MsgId du .xml)", ref);
             throw new IllegalStateException("ACK invalide : reference=" + ref + " aucun VirementEmis correspondant trouvé");
         }
+        int updated = 0;
+        int unchanged = 0;
         for (VirementEmis v : virements) {
             // On ne modifie pas les champs de la clé primaire (id_statut, id_sop, etc.)
             // pour éviter l'erreur Hibernate "identifier ... was altered".
+            String currentStatut = v.getStatut() != null ? v.getStatut().trim() : "";
+            if (currentStatut.equalsIgnoreCase(statut)) {
+                unchanged++;
+                continue;
+            }
             v.setStatut(statut);
             virementEmisRepository.save(v);
+            updated++;
         }
-        log.info("ACK appliqué : reference={}, statut={}, {} virement(s) mis à jour en base", ref, statut, virements.size());
+        if (updated == 0) {
+            log.info("ACK ignoré (idempotent) : reference={}, statut déjà '{}', {} virement(s) inchangé(s)", ref, statut, unchanged);
+            return;
+        }
+        log.info("ACK appliqué : reference={}, statut={}, {} virement(s) mis à jour en base, {} inchangé(s)", ref, statut, updated, unchanged);
+    }
+
+    private void saveDataAckByUetr(String uetrRaw, String statusRaw) {
+        if (uetrRaw == null || uetrRaw.trim().isEmpty()) {
+            throw new IllegalStateException("ACK invalide : UETR vide");
+        }
+        String uetr = truncate(uetrRaw.trim(), 254);
+        String statut = truncate(AckHelper.normalizeStatutSwift(statusRaw != null ? statusRaw.trim() : "ACK"), 50);
+        List<VirementEmis> virements = virementEmisRepository.findByUetrForDedup(uetr, org.springframework.data.domain.PageRequest.of(0, 1));
+        if (virements.isEmpty()) {
+            throw new IllegalStateException("ACK invalide : uetr=" + uetr + " aucun VirementEmis correspondant trouvé");
+        }
+        int updated = 0;
+        int unchanged = 0;
+        for (VirementEmis v : virements) {
+            String currentStatut = v.getStatut() != null ? v.getStatut().trim() : "";
+            if (currentStatut.equalsIgnoreCase(statut)) {
+                unchanged++;
+                continue;
+            }
+            v.setStatut(statut);
+            virementEmisRepository.save(v);
+            updated++;
+        }
+        if (updated == 0) {
+            log.info("ACK ignoré (idempotent UETR): uetr={}, statut déjà '{}', {} virement(s) inchangé(s)", uetr, statut, unchanged);
+            return;
+        }
+        log.info("ACK appliqué (UETR): uetr={}, statut={}, {} virement(s) mis à jour, {} inchangé(s)", uetr, statut, updated, unchanged);
     }
 }
 

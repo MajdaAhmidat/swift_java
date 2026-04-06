@@ -1,11 +1,9 @@
 package com.stage.swift.utils;
 
 /**
- * Utilitaires communs pour les chaînes et formats.
- * <p>
- * <b>Rôle :</b> Méthodes statiques réutilisables (validation, troncature, jointure)
+
+ * Rôle :Méthodes statiques réutilisables (validation, troncature, jointure)
  * sans dépendance métier. Utilisées par les DTOs, services et helpers.
- * </p>
  */
 public final class Commons {
 
@@ -19,10 +17,7 @@ public final class Commons {
         return str != null && !str.isEmpty();
     }
 
-    /**
-     * Tronque un code/texte à une longueur max (ex. référence 35 car).
-     * Retourne null si code est null.
-     */
+
     public static String trimToLength(String code, int maxLength) {
         if (code == null) return null;
         return code.length() > maxLength ? code.substring(0, maxLength) : code;

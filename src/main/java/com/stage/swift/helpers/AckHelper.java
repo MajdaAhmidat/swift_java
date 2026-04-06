@@ -8,8 +8,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Extraction des données depuis un message .ack (SAA) : référence du message et statut réseau.
- * Obligatoire : statut normalisé en "ACK" ou "NACK".
+ * Extraction des données depuis un message .ack (SAA)
  */
 public final class AckHelper {
 
@@ -30,6 +29,10 @@ public final class AckHelper {
             Pattern.CASE_INSENSITIVE);
     /** Contenu de type ID (32 hex) entre > et < ; espaces/newlines autorisés. */
     private static final Pattern REFERENCE_HEX_ID = Pattern.compile(">\\s*([a-fA-F0-9]{32})\\s*<");
+    /** UETR explicite dans le XML (UUID standard). */
+    private static final Pattern UETR_TAG = Pattern.compile(
+            "<[^:>]*:?UETR[^>]*>\\s*([a-fA-F0-9\\-]{36})\\s*</[^:>]*:?UETR>",
+            Pattern.CASE_INSENSITIVE);
 
     /**
      * Statut réseau renvoyé par SAA dans les ACK/SOP :
@@ -43,8 +46,7 @@ public final class AckHelper {
     }
 
     /**
-     * Extrait la référence du message (celle stockée en virement_emis.reference).
-     * Pour XML PACS/CAMT on priorise GrpHdr/MsgId ; sinon BizMsgIdr, MsgId, Reference...
+     * Extrait la référence du message
      */
     public static String extractReference(String ackContent) {
         List<String> all = extractAllReferencesOrdered(ackContent);
@@ -53,7 +55,6 @@ public final class AckHelper {
 
     /**
      * Extrait toutes les références candidates (GrpHdr/MsgId en premier, puis toutes les autres).
-     * Permet d'essayer chaque valeur jusqu'à trouver le virement en base (ordre préservé, sans doublon).
      */
     public static List<String> extractAllReferencesOrdered(String ackContent) {
         Set<String> seen = new LinkedHashSet<>();
@@ -86,6 +87,21 @@ public final class AckHelper {
         }
         // 4) Ids 32 hex entre > et < (fallback)
         m = REFERENCE_HEX_ID.matcher(ackContent);
+        while (m.find()) {
+            String v = m.group(1).trim();
+            if (!v.isEmpty() && seen.add(v)) ordered.add(v);
+        }
+        return ordered;
+    }
+
+    /**
+     * Extrait toutes les valeurs UETR candidates trouvées dans le message.
+     */
+    public static List<String> extractAllUetrOrdered(String content) {
+        Set<String> seen = new LinkedHashSet<>();
+        List<String> ordered = new ArrayList<>();
+        if (content == null) return ordered;
+        Matcher m = UETR_TAG.matcher(content);
         while (m.find()) {
             String v = m.group(1).trim();
             if (!v.isEmpty() && seen.add(v)) ordered.add(v);

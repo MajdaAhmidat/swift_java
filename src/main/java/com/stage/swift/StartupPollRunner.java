@@ -8,10 +8,6 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
-/**
- * Lance un premier passage de traitement des dossiers IN / IN_ACK et OUT (OUT_SAA / OUT_SOP)
- * environ 2 secondes après le démarrage, pour ne pas dépendre uniquement des schedulers.
- */
 @Component
 public class StartupPollRunner implements ApplicationRunner {
 
@@ -37,7 +33,7 @@ public class StartupPollRunner implements ApplicationRunner {
         }
         log.info("[StartupPollRunner] Exécution du premier polling IN / IN_ACK");
         mxAckScheduler.pollInputDirectories();
-        log.info("[StartupPollRunner] Exécution du premier polling OUT (OUT_SAA / OUT_SOP)");
-        outScheduler.pollOutDirectories();
+        // Le polling OUT (OUT_SAA / OUT_SOP) est géré uniquement par OutScheduler via @Scheduled
+        // pour éviter les traitements concurrents sur les mêmes fichiers et les doublons en base.
     }
 }

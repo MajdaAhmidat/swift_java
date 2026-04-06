@@ -24,16 +24,25 @@ import com.stage.swift.repository.VirementEmisHistoRepository;
 import com.stage.swift.service.entity.MessageEmisService;
 import com.stage.swift.service.entity.VirementEmisService;
 import com.stage.swift.service.mx.Iso20022MessageService;
+import com.stage.swift.service.mx.MessageXmlArchiveService;
 import com.stage.swift.service.ref.ReferenceDataResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
 
+import javax.xml.parsers.DocumentBuilderFactory;
+import java.io.StringReader;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 import static com.stage.swift.helpers.MxMapperHelper.truncate;
@@ -48,7 +57,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     private static final Logger log = LoggerFactory.getLogger(Iso20022MessageServiceImpl.class);
 
     private static final long DEFAULT_ID_STATUT = 1L;
-    private static final long DEFAULT_ID_ADRESSE = 1L;
+    private static final long DEFAULT_ID_ADRESSE = 0L;
     /** type_adresse : 1 = DBTR (débiteur), 2 = CDTR (créditeur) */
     private static final long ID_TYPE_ADRESSE_DBTR = 1L;
     private static final long ID_TYPE_ADRESSE_CDTR = 2L;
@@ -56,6 +65,12 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     private static final long DEFAULT_CODE_BIC = 1L;
     private static final long CODE_MSG_PACS008 = 1L;
     private static final long CODE_MSG_PACS009 = 2L;
+    private static final Pattern UETR_XML_PATTERN = Pattern.compile(
+            "<(?:[A-Za-z0-9_\\-]+:)?UETR(?:\\s+[^>]*)?>\\s*([^<]+?)\\s*</(?:[A-Za-z0-9_\\-]+:)?UETR\\s*>",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern SOP_XML_PATTERN = Pattern.compile(
+            "<(?:[A-Za-z0-9_\\-]+:)?(?:SOP|SystemOperant|SystemeOperant|BizSvc|BusinessService)(?:\\s+[^>]*)?>\\s*([^<]+?)\\s*</(?:[A-Za-z0-9_\\-]+:)?(?:SOP|SystemOperant|SystemeOperant|BizSvc|BusinessService)\\s*>",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
     private final VirementEmisRepository virementEmisRepository;
     private final MessageEmisRepository messageEmisRepository;
@@ -70,6 +85,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     private final PACS008ToVirementEmisMapper pacs008ToVirementEmisMapper;
     private final PACS009ToVirementEmisMapper pacs009ToVirementEmisMapper;
     private final ReferenceDataResolver referenceDataResolver;
+    private final MessageXmlArchiveService messageXmlArchiveService;
 
     public Iso20022MessageServiceImpl(VirementEmisRepository virementEmisRepository,
                                       MessageEmisRepository messageEmisRepository,
@@ -83,7 +99,8 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                                       TypeMessageRepository typeMessageRepository,
                                       PACS008ToVirementEmisMapper pacs008ToVirementEmisMapper,
                                       PACS009ToVirementEmisMapper pacs009ToVirementEmisMapper,
-                                      ReferenceDataResolver referenceDataResolver) {
+                                      ReferenceDataResolver referenceDataResolver,
+                                      MessageXmlArchiveService messageXmlArchiveService) {
         this.virementEmisRepository = virementEmisRepository;
         this.messageEmisRepository = messageEmisRepository;
         this.virementEmisHistoRepository = virementEmisHistoRepository;
@@ -97,6 +114,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         this.pacs008ToVirementEmisMapper = pacs008ToVirementEmisMapper;
         this.pacs009ToVirementEmisMapper = pacs009ToVirementEmisMapper;
         this.referenceDataResolver = referenceDataResolver;
+        this.messageXmlArchiveService = messageXmlArchiveService;
     }
 
     @Override
@@ -130,6 +148,10 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         MessageMX messageType = SaaEnvelopeHelper.getMessageTypeFromXml(xml);
         if (messageType == null) {
             String detected = SaaEnvelopeHelper.getFirstMessageIdentifier(xml);
+            if (detected != null && detected.toLowerCase().startsWith("camt.053")) {
+                log.info("CAMT053 ignoré (non pris en charge dans ce flux IN_SOP), aucun virement créé");
+                return null;
+            }
             String msg = detected != null
                     ? ("Type de message MX non supporté: '" + detected + "'. Attendu: pacs.008, pacs.009 ou camt.054.")
                     : "Type de message MX non supporté. Aucun MessageIdentifier pacs.008/pacs.009/camt.054 trouvé.";
@@ -145,8 +167,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     }
 
     /**
-     * Traite un message camt.054 (Bank to Customer Debit Credit Notification).
-     * Tente le fragment extrait puis le XML complet si besoin (Prowide peut extraire le Document depuis SAA).
+     * Traite un message camt.054 (Bank to Customer Debit Credit Notification)..
      */
     private void parseAndSaveCamt054(String xmlToParse, String fullXml) {
         com.prowidesoftware.swift.model.mx.MxCamt05400108 camt = null;
@@ -164,8 +185,9 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
             log.info("CAMT054: message reçu et accepté (parsing Prowide indisponible ou format non reconnu, aucun virement créé)");
             return;
         }
+        long idSop = resolveSopIdFromBusinessSource(xmlToParse, "CAMT054");
         try {
-            parseAndSaveCamt054Entries(camt);
+            parseAndSaveCamt054Entries(camt, idSop, xmlToParse);
         } catch (Exception e) {
             log.warn("CAMT054: erreur lors de la création des virements: {}", e.getMessage());
         }
@@ -200,7 +222,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         return out;
     }
 
-    private void parseAndSaveCamt054Entries(com.prowidesoftware.swift.model.mx.MxCamt05400108 camt) {
+    private void parseAndSaveCamt054Entries(com.prowidesoftware.swift.model.mx.MxCamt05400108 camt, long idSop, String rawXml) {
         com.prowidesoftware.swift.model.mx.dic.BankToCustomerDebitCreditNotificationV08 notif = camt.getBkToCstmrDbtCdtNtfctn();
         if (notif == null || notif.getNtfctn() == null || notif.getNtfctn().isEmpty()) {
             log.info("CAMT054: aucune notification, message accepté sans création de virement");
@@ -215,14 +237,32 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                     if (ed.getTxDtls() == null) continue;
                     for (com.prowidesoftware.swift.model.mx.dic.EntryTransaction10 tx : ed.getTxDtls()) {
                         Long nextIdEmis = virementEmisRepository.nextIdVrtEmis();
-                        VirementEmis v = mapCamt054TxToVirementEmis(tx, ntry, grpMsgId, nextIdEmis, referenceDataResolver);
-                        virementEmisService.save(v);
-                        // Historisation initiale du virement  au moment de la création
-                        createHistoFromVirement(v);
-                        MessageEmis m = mapToMessageEmis(v, tx.getRefs() != null ? tx.getRefs().getMsgId() : grpMsgId);
-                        m.setIdMsgEmis(messageEmisRepository.nextIdMsgEmis());
-                        messageEmisService.save(m);
-                        log.info("CAMT054: VirementEmis + MessageEmis créés, idVrtEmis={}", v.getIdVrtEmis());
+                        VirementEmis incoming = mapCamt054TxToVirementEmis(tx, ntry, grpMsgId, nextIdEmis, idSop, referenceDataResolver);
+                        validateUetrForEmis(incoming, "CAMT054");
+                        Optional<VirementEmis> existingOpt = findExistingEmisForIdempotence(incoming);
+                        VirementEmis entityToPersist = existingOpt
+                                .map(existing -> mergeEmis(existing, incoming))
+                                .orElse(incoming);
+
+                        virementEmisService.save(entityToPersist);
+                        messageXmlArchiveService.archiveForVirementEmis(
+                                entityToPersist.getIdVrtEmis(),
+                                "EMIS",
+                                "camt.054.001.08",
+                                rawXml
+                        );
+                        syncAdresseForExistingEmis(existingOpt, incoming, entityToPersist);
+                        // Historiser chaque création et chaque modification.
+                        createHistoFromVirement(entityToPersist);
+                        if (!existingOpt.isPresent()) {
+                            MessageEmis m = mapToMessageEmis(entityToPersist, tx.getRefs() != null ? tx.getRefs().getMsgId() : grpMsgId);
+                            m.setIdMsgEmis(messageEmisRepository.nextIdMsgEmis());
+                            messageEmisService.save(m);
+                            log.info("CAMT054: VirementEmis créé + historisé + MessageEmis, idVrtEmis={}", entityToPersist.getIdVrtEmis());
+                        } else {
+                            log.info("CAMT054: VirementEmis actualisé + historisé: uetr={}, reference={}, idVrtEmis={}",
+                                    entityToPersist.getUetr(), entityToPersist.getReference(), entityToPersist.getIdVrtEmis());
+                        }
                     }
                 }
             }
@@ -232,6 +272,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     private VirementEmis mapCamt054TxToVirementEmis(com.prowidesoftware.swift.model.mx.dic.EntryTransaction10 tx,
                                                     com.prowidesoftware.swift.model.mx.dic.ReportEntry10 ntry,
                                                     String grpMsgId, Long nextIdEmis,
+                                                    long idSop,
                                                     ReferenceDataResolver resolver) {
         String bicCode = null;
         if (tx.getRltdAgts() != null) {
@@ -240,7 +281,6 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
             if ((bicCode == null || bicCode.isEmpty()) && tx.getRltdAgts().getInstdAgt() != null && tx.getRltdAgts().getInstdAgt().getFinInstnId() != null)
                 bicCode = tx.getRltdAgts().getInstdAgt().getFinInstnId().getBICFI();
         }
-        long idSop = resolver != null ? resolver.resolveSopIdFromBic(bicCode) : DEFAULT_ID_SOP;
         long idStatutStatut = resolver != null ? resolver.resolveStatutIdByCode("INTEGRE") : DEFAULT_ID_STATUT;
         long codeBic = resolver != null ? resolver.resolveCodeBicFromBic(bicCode) : DEFAULT_CODE_BIC;
 
@@ -258,7 +298,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                 && tx.getRltdPties().getDbtr().getPty() != null) {
             pstlAdr = tx.getRltdPties().getDbtr().getPty().getPstlAdr();
         }
-        long idAdresse = resolveAdresseIdFromPostalAdr(pstlAdr, ID_TYPE_ADRESSE_DBTR);
+        long idAdresse = safeResolveAdresseIdFromPostalAdr(pstlAdr, ID_TYPE_ADRESSE_DBTR, "CAMT054");
 
         VirementEmis v = new VirementEmis();
         v.setIdVrtEmis(nextIdEmis);
@@ -276,7 +316,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         String ref = grpMsgId;
         if (tx.getRefs() != null) {
             if (tx.getRefs().getMsgId() != null) ref = tx.getRefs().getMsgId();
-            v.setUetr("");
+            v.setUetr(truncate(tx.getRefs().getUETR(), 254));
             v.setEndToEnd(truncate(tx.getRefs().getEndToEndId() != null ? tx.getRefs().getEndToEndId() : "NOTPROVIDED", 35));
         } else {
             v.setUetr("");
@@ -332,29 +372,40 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                         ? mx.getFIToFICstmrCdtTrf().getGrpHdr().getMsgId()
                         : null;
                 String bicCode = extractBicCodeFromPacs008(mx);
-                long idSop = referenceDataResolver.resolveSopIdFromBic(bicCode);
+                long idSop = resolveSopIdFromBusinessSource(xmlToParse, "PACS008");
                 long idStatutStatut = referenceDataResolver.resolveStatutIdByCode("INTEGRE");
                 long codeBic = referenceDataResolver.resolveCodeBicFromBic(bicCode);
-                long idAdresse = resolveAdresseIdFromPacs008(mx);
-                String refForDedup = msgId != null ? truncate(msgId, 35) : null;
-                if (refForDedup != null && !refForDedup.trim().isEmpty()
-                        && !virementEmisRepository.findByReferenceAndIdSop(refForDedup, idSop).isEmpty()) {
-                    log.info("PACS 008: message déjà traité pour reference={} et id_sop={}, aucun nouveau VirementEmis créé",
-                            refForDedup, idSop);
-                    return;
-                }
+                long idAdresse = safeResolveAdresseIdFromPacs008(mx, "PACS008");
                 Long nextIdEmis = virementEmisRepository.nextIdVrtEmis();
-                VirementEmis virementEmis = pacs008ToVirementEmisMapper.toVirementEmis(mx, nextIdEmis,
+                VirementEmis incoming = pacs008ToVirementEmisMapper.toVirementEmis(mx, nextIdEmis,
                         idStatutStatut, idAdresse, idSop, codeBic, CODE_MSG_PACS008);
                 // Statut initial côté émission : code_statut (INTEGRE)
-                virementEmis.setStatut(resolveCodeStatut(idStatutStatut));
-                virementEmisService.save(virementEmis);
-                // Historisation initiale du virement (sans statut) au moment de la création
-                createHistoFromVirement(virementEmis);
-                MessageEmis messageEmis = mapToMessageEmis(virementEmis, msgId);
-                messageEmis.setIdMsgEmis(messageEmisRepository.nextIdMsgEmis());
-                messageEmisService.save(messageEmis);
-                log.info("PACS 008: VirementEmis + MessageEmis créés, idVrtEmis={}", virementEmis.getIdVrtEmis());
+                incoming.setStatut(resolveCodeStatut(idStatutStatut));
+                applyUetrFallbackFromXmlIfMissing(incoming, xmlToParse, "PACS008");
+                validateUetrForEmis(incoming, "PACS008");
+                Optional<VirementEmis> existingOpt = findExistingEmisForIdempotence(incoming);
+                VirementEmis entityToPersist = existingOpt
+                        .map(existing -> mergeEmis(existing, incoming))
+                        .orElse(incoming);
+                virementEmisService.save(entityToPersist);
+                messageXmlArchiveService.archiveForVirementEmis(
+                        entityToPersist.getIdVrtEmis(),
+                        "EMIS",
+                        "pacs.008.001.08",
+                        xmlToParse
+                );
+                syncAdresseForExistingEmis(existingOpt, incoming, entityToPersist);
+                // Historiser chaque création et chaque modification.
+                createHistoFromVirement(entityToPersist);
+                if (!existingOpt.isPresent()) {
+                    MessageEmis messageEmis = mapToMessageEmis(entityToPersist, msgId);
+                    messageEmis.setIdMsgEmis(messageEmisRepository.nextIdMsgEmis());
+                    messageEmisService.save(messageEmis);
+                    log.info("PACS 008: VirementEmis créé + historisé + MessageEmis, idVrtEmis={}", entityToPersist.getIdVrtEmis());
+                } else {
+                    log.info("PACS 008: VirementEmis actualisé + historisé: uetr={}, reference={}, idVrtEmis={}",
+                            entityToPersist.getUetr(), entityToPersist.getReference(), entityToPersist.getIdVrtEmis());
+                }
                 return;
             }
             MxPacs00900108 mx = MxPacs00900108.parse(xmlToParse);
@@ -362,39 +413,252 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                     ? mx.getFICdtTrf().getGrpHdr().getMsgId()
                     : null;
             String bicCode = extractBicCodeFromPacs009(mx);
-            long idSop = referenceDataResolver.resolveSopIdFromBic(bicCode);
+            long idSop = resolveSopIdFromBusinessSource(xmlToParse, "PACS009");
             long idStatutStatut = referenceDataResolver.resolveStatutIdByCode("INTEGRE");
             long codeBic = referenceDataResolver.resolveCodeBicFromBic(bicCode);
-            long idAdresse = resolveAdresseIdFromPacs009(mx);
-            String refForDedup = msgId != null ? truncate(msgId, 35) : null;
-            if (refForDedup != null && !refForDedup.trim().isEmpty()
-                    && !virementEmisRepository.findByReferenceAndIdSop(refForDedup, idSop).isEmpty()) {
-                log.info("PACS 009: message déjà traité pour reference={} et id_sop={}, aucun nouveau VirementEmis créé",
-                        refForDedup, idSop);
-                return;
-            }
+            long idAdresse = safeResolveAdresseIdFromPacs009(mx, "PACS009");
             Long nextIdEmis = virementEmisRepository.nextIdVrtEmis();
-            VirementEmis virementEmis = pacs009ToVirementEmisMapper.toVirementEmis(mx, nextIdEmis,
+            VirementEmis incoming = pacs009ToVirementEmisMapper.toVirementEmis(mx, nextIdEmis,
                     idStatutStatut, idAdresse, idSop, codeBic, CODE_MSG_PACS009);
             // Statut initial côté émission : code_statut (INTEGRE)
-            virementEmis.setStatut(resolveCodeStatut(idStatutStatut));
-            virementEmisService.save(virementEmis);
-            // Historisation initiale du virement (sans statut) au moment de la création
-            createHistoFromVirement(virementEmis);
-            MessageEmis messageEmis = mapToMessageEmis(virementEmis, msgId);
-            messageEmis.setIdMsgEmis(messageEmisRepository.nextIdMsgEmis());
-            messageEmisService.save(messageEmis);
-            log.info("PACS 009: VirementEmis + MessageEmis créés, idVrtEmis={}", virementEmis.getIdVrtEmis());
+            incoming.setStatut(resolveCodeStatut(idStatutStatut));
+            applyUetrFallbackFromXmlIfMissing(incoming, xmlToParse, "PACS009");
+            validateUetrForEmis(incoming, "PACS009");
+            Optional<VirementEmis> existingOpt = findExistingEmisForIdempotence(incoming);
+            VirementEmis entityToPersist = existingOpt
+                    .map(existing -> mergeEmis(existing, incoming))
+                    .orElse(incoming);
+            virementEmisService.save(entityToPersist);
+            messageXmlArchiveService.archiveForVirementEmis(
+                    entityToPersist.getIdVrtEmis(),
+                    "EMIS",
+                    "pacs.009.001.08",
+                    xmlToParse
+            );
+            syncAdresseForExistingEmis(existingOpt, incoming, entityToPersist);
+            // Historiser chaque création et chaque modification.
+            createHistoFromVirement(entityToPersist);
+            if (!existingOpt.isPresent()) {
+                MessageEmis messageEmis = mapToMessageEmis(entityToPersist, msgId);
+                messageEmis.setIdMsgEmis(messageEmisRepository.nextIdMsgEmis());
+                messageEmisService.save(messageEmis);
+                log.info("PACS 009: VirementEmis créé + historisé + MessageEmis, idVrtEmis={}", entityToPersist.getIdVrtEmis());
+            } else {
+                log.info("PACS 009: VirementEmis actualisé + historisé: uetr={}, reference={}, idVrtEmis={}",
+                        entityToPersist.getUetr(), entityToPersist.getReference(), entityToPersist.getIdVrtEmis());
+            }
         } catch (Exception e) {
             log.error("Erreur lors du parsing {} via Prowide", messageType.getLabel(), e);
             throw new IllegalArgumentException("Erreur lors du parsing MX : " + e.getMessage(), e);
         }
     }
 
+    private Optional<VirementEmis> findExistingEmisForIdempotence(VirementEmis incoming) {
+        if (incoming == null) {
+            return Optional.empty();
+        }
+        String uetr = incoming.getUetr() != null ? incoming.getUetr().trim() : "";
+        if (!uetr.isEmpty()) {
+            return virementEmisRepository
+                    .findByUetrForDedup(uetr, PageRequest.of(0, 1))
+                    .stream()
+                    .findFirst();
+        }
+
+        String reference = incoming.getReference() != null ? incoming.getReference().trim() : "";
+        Long idSop = incoming.getIdSop();
+        if (reference.isEmpty() || idSop == null) {
+            return Optional.empty();
+        }
+        Optional<VirementEmis> fallback = virementEmisRepository.findByReferenceAndIdSop(reference, idSop)
+                .stream()
+                .filter(v -> java.util.Objects.equals(v.getCodeMsgTypeMessage(), incoming.getCodeMsgTypeMessage()))
+                .max(java.util.Comparator.comparing(VirementEmis::getIdVrtEmis));
+        fallback.ifPresent(v -> log.info(
+                "EMIS idempotence fallback (sans UETR): reference={}, idSop={}, idVrtEmis={}",
+                reference, idSop, v.getIdVrtEmis()));
+        return fallback;
+    }
+
+    private void applyUetrFallbackFromXmlIfMissing(VirementEmis incoming, String xml, String flow) {
+        if (incoming == null) {
+            return;
+        }
+        String current = incoming.getUetr() != null ? incoming.getUetr().trim() : "";
+        if (!current.isEmpty()) {
+            return;
+        }
+        String fallback = extractFirstUetrFromXml(xml);
+        if (!fallback.isEmpty()) {
+            incoming.setUetr(truncate(fallback, 254));
+            log.info("{}: UETR récupéré via fallback XML -> {}", flow, incoming.getUetr());
+        } else {
+            log.warn("{}: UETR absent après fallback XML", flow);
+        }
+    }
+
+    private String extractFirstUetrFromXml(String xml) {
+        if (xml == null || xml.trim().isEmpty()) {
+            return "";
+        }
+        String fromDom = extractFirstUetrWithDom(xml);
+        if (!fromDom.isEmpty()) {
+            return fromDom;
+        }
+        java.util.regex.Matcher matcher = UETR_XML_PATTERN.matcher(xml);
+        if (!matcher.find()) {
+            return "";
+        }
+        String value = matcher.group(1);
+        return value != null ? value.trim() : "";
+    }
+
+    private String extractFirstUetrWithDom(String xml) {
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            try {
+                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+                factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+                factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            } catch (Exception ignored) { }
+            Document doc = factory.newDocumentBuilder().parse(new InputSource(new StringReader(xml)));
+            NodeList nodes = doc.getElementsByTagNameNS("*", "UETR");
+            for (int i = 0; i < nodes.getLength(); i++) {
+                Node n = nodes.item(i);
+                if (n == null) {
+                    continue;
+                }
+                String text = n.getTextContent();
+                String trimmed = text != null ? text.trim() : "";
+                if (!trimmed.isEmpty()) {
+                    return trimmed;
+                }
+            }
+        } catch (Exception ignored) {
+            // fallback regex juste après
+        }
+        return "";
+    }
+
+    private long resolveSopIdFromBusinessSource(String xml, String flow) {
+        String sopLibelle = extractFirstSopBusinessValue(xml);
+        if (sopLibelle.isEmpty()) {
+            log.warn("{}: SOP métier introuvable dans le message, fallback id_sop={}", flow, DEFAULT_ID_SOP);
+            return DEFAULT_ID_SOP;
+        }
+        return sopRepository.findByLibelleSopNormalized(sopLibelle)
+                .map(s -> s.getId())
+                .orElseGet(() -> {
+                    log.warn("{}: SOP métier '{}' absent de la table sop, fallback id_sop={}",
+                            flow, sopLibelle, DEFAULT_ID_SOP);
+                    return DEFAULT_ID_SOP;
+                });
+    }
+
+    private String extractFirstSopBusinessValue(String xml) {
+        if (xml == null || xml.trim().isEmpty()) {
+            return "";
+        }
+        String fromDom = extractFirstSopWithDom(xml);
+        if (!fromDom.isEmpty()) {
+            return fromDom;
+        }
+        java.util.regex.Matcher matcher = SOP_XML_PATTERN.matcher(xml);
+        if (!matcher.find()) {
+            return "";
+        }
+        String value = matcher.group(1);
+        return value != null ? value.trim() : "";
+    }
+
+    private String extractFirstSopWithDom(String xml) {
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            try {
+                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+                factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+                factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            } catch (Exception ignored) { }
+            Document doc = factory.newDocumentBuilder().parse(new InputSource(new StringReader(xml)));
+            String[] names = { "SOP", "SystemOperant", "SystemeOperant", "BizSvc", "BusinessService" };
+            for (String name : names) {
+                NodeList nodes = doc.getElementsByTagNameNS("*", name);
+                for (int i = 0; i < nodes.getLength(); i++) {
+                    Node n = nodes.item(i);
+                    if (n == null) {
+                        continue;
+                    }
+                    String text = n.getTextContent();
+                    String trimmed = text != null ? text.trim() : "";
+                    if (!trimmed.isEmpty()) {
+                        return trimmed;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // fallback regex juste après
+        }
+        return "";
+    }
+
+    private void validateUetrForEmis(VirementEmis incoming, String flow) {
+        String uetr = incoming != null && incoming.getUetr() != null ? incoming.getUetr().trim() : "";
+        if (uetr.isEmpty()) {
+            log.warn("{}: UETR manquant -> message EMIS stocké sans idempotence UETR (pas de sync id_adresse par UETR)", flow);
+        }
+        incoming.setUetr(uetr);
+    }
+
+    private VirementEmis mergeEmis(VirementEmis target, VirementEmis source) {
+        target.setReference(source.getReference());
+        target.setDenominationBnf(source.getDenominationBnf());
+        target.setNumCompteBnf(source.getNumCompteBnf());
+        target.setNumCompteOrd(source.getNumCompteOrd());
+        target.setDenominationOrd(source.getDenominationOrd());
+        target.setMontant(source.getMontant());
+        target.setDateValeur(source.getDateValeur());
+        target.setRenseignement(source.getRenseignement());
+        target.setCodeDevise(source.getCodeDevise());
+        target.setDateIntegration(source.getDateIntegration());
+        target.setBicOrdonnateur(source.getBicOrdonnateur());
+        target.setBicBeneficiaire(source.getBicBeneficiaire());
+        target.setUetr(source.getUetr());
+        target.setEndToEnd(source.getEndToEnd());
+        target.setStatut(source.getStatut());
+        return target;
+    }
+
+    /**
+     * Si le même UETR revient avec une nouvelle adresse, on met à jour id_adresse
+     * sur la même ligne virement_emis (id_vrt_emis constant).
+     */
+    private void syncAdresseForExistingEmis(Optional<VirementEmis> existingOpt,
+                                            VirementEmis incoming,
+                                            VirementEmis persisted) {
+        if (!existingOpt.isPresent() || incoming == null || persisted == null) {
+            return;
+        }
+        Long oldAdresse = existingOpt.get().getIdAdresseAdresse();
+        Long newAdresse = incoming.getIdAdresseAdresse();
+        if (newAdresse == null || java.util.Objects.equals(oldAdresse, newAdresse)) {
+            return;
+        }
+        int updated = virementEmisRepository.updateAdresseByIdVrtEmis(persisted.getIdVrtEmis(), newAdresse);
+        if (updated > 0) {
+            log.info("EMIS UETR {}: id_adresse mis à jour {} -> {} sur idVrtEmis={}",
+                    persisted.getUetr(), oldAdresse, newAdresse, persisted.getIdVrtEmis());
+        } else {
+            log.warn("EMIS UETR {}: échec mise à jour id_adresse (idVrtEmis={}, old={}, new={})",
+                    persisted.getUetr(), persisted.getIdVrtEmis(), oldAdresse, newAdresse);
+        }
+    }
+
     private void ensureReferenceDataExists() {
         StringBuilder missing = new StringBuilder();
         if (!statutRepository.findById(DEFAULT_ID_STATUT).isPresent()) missing.append(" statut(id=1)");
-        if (!adresseRepository.findById(DEFAULT_ID_ADRESSE).isPresent()) missing.append(" adresse(id=1)");
+        if (!adresseRepository.findById(DEFAULT_ID_ADRESSE).isPresent()) missing.append(" adresse(id=0)");
         if (!sopRepository.findById(DEFAULT_ID_SOP).isPresent()) missing.append(" sop(id=1)");
         if (!bicRepository.findById(DEFAULT_CODE_BIC).isPresent()) missing.append(" bic(code_bic=1)");
         if (!typeMessageRepository.findById(CODE_MSG_PACS008).isPresent()) missing.append(" type_message(code_msg=1)");
@@ -436,10 +700,16 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                 ((pstlAdr.getStrtNm() != null) ? pstlAdr.getStrtNm() : "") +
                         ((pstlAdr.getBldgNb() != null) ? " " + pstlAdr.getBldgNb() : ""),
                 255);
-        String ligne2 = null;
-        String ville = truncate(pstlAdr.getTwnNm() != null ? pstlAdr.getTwnNm() : "", 150);
+        String ligne2 = truncate(
+                ((pstlAdr.getFlr() != null) ? pstlAdr.getFlr() : "") +
+                        ((pstlAdr.getPstBx() != null) ? " " + pstlAdr.getPstBx() : "") +
+                        ((pstlAdr.getDept() != null) ? " " + pstlAdr.getDept() : "") +
+                        ((pstlAdr.getSubDept() != null) ? " " + pstlAdr.getSubDept() : "") +
+                        ((pstlAdr.getDstrctNm() != null) ? " " + pstlAdr.getDstrctNm() : ""),
+                255);
+        String ville = truncate(pstlAdr.getTwnNm() != null ? pstlAdr.getTwnNm() : pstlAdr.getTwnLctnNm(), 150);
         String codePostal = truncate(pstlAdr.getPstCd() != null ? pstlAdr.getPstCd() : "", 20);
-        String pays = truncate(pstlAdr.getCtry() != null ? pstlAdr.getCtry() : "", 100);
+        String pays = truncate(pstlAdr.getCtry() != null ? pstlAdr.getCtry() : pstlAdr.getCtrySubDvsn(), 100);
 
         // Compléter à partir de AdrLine si présent (ex: PACS/CAMT avec AdrLine seulement)
         java.util.List<String> adrLines = pstlAdr.getAdrLine();
@@ -463,29 +733,51 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
             return DEFAULT_ID_ADRESSE;
         }
 
-        final String fLigne1 = ligne1;
-        final String fLigne2 = ligne2;
-        final String fVille = ville;
-        final String fCodePostal = codePostal;
-        final String fPays = pays;
+        final String fLigne1 = normalizeNullable(ligne1);
+        final String fLigne2 = normalizeNullable(ligne2);
+        final String fVille = normalizeNullable(ville);
+        final String fCodePostal = normalizeNullable(codePostal);
+        final String fPays = normalizeNullable(pays);
         final long fIdTypeAdresse = idTypeAdresse;
 
+        // Priorité: réutiliser la même adresse textuelle (même ID) même si le type DBTR/CDTR diffère.
         return adresseRepository
-                .findByLigne1AndLigne2AndVilleAndCodePostalAndPaysAndIdTypeAdresse(fLigne1, fLigne2, fVille, fCodePostal, fPays, fIdTypeAdresse)
+                .findByLigne1AndLigne2AndVilleAndCodePostalAndPays(fLigne1, fLigne2, fVille, fCodePostal, fPays)
                 .map(Adresse::getIdAdresse)
-                .orElseGet(() -> {
-                    Long nextId = adresseRepository.nextIdAdresse();
-                    Adresse a = new Adresse();
-                    a.setIdAdresse(nextId);
-                    a.setLigne1(fLigne1);
-                    a.setLigne2(fLigne2);
-                    a.setVille(fVille);
-                    a.setCodePostal(fCodePostal);
-                    a.setPays(fPays);
-                    a.setIdTypeAdresse(fIdTypeAdresse);
-                    adresseRepository.save(a);
-                    return nextId;
-                });
+                .orElseGet(() -> adresseRepository
+                        .findByLigne1AndLigne2AndVilleAndCodePostalAndPaysAndIdTypeAdresse(fLigne1, fLigne2, fVille, fCodePostal, fPays, fIdTypeAdresse)
+                        .map(Adresse::getIdAdresse)
+                        .orElseGet(() -> {
+                            Long nextId = adresseRepository.nextIdAdresse();
+                            Adresse a = new Adresse();
+                            a.setIdAdresse(nextId);
+                            a.setLigne1(fLigne1);
+                            a.setLigne2(fLigne2);
+                            a.setVille(fVille);
+                            a.setCodePostal(fCodePostal);
+                            a.setPays(fPays);
+                            a.setIdTypeAdresse(fIdTypeAdresse);
+                            adresseRepository.save(a);
+                            return nextId;
+                        }));
+    }
+
+    private long safeResolveAdresseIdFromPostalAdr(com.prowidesoftware.swift.model.mx.dic.PostalAddress24 pstlAdr,
+                                                   long idTypeAdresse,
+                                                   String flow) {
+        try {
+            return resolveAdresseIdFromPostalAdr(pstlAdr, idTypeAdresse);
+        } catch (Exception e) {
+            log.warn("{}: erreur résolution adresse depuis PostalAdr, fallback id_adresse={} ({})",
+                    flow, DEFAULT_ID_ADRESSE, e.getMessage());
+            return DEFAULT_ID_ADRESSE;
+        }
+    }
+
+    private static String normalizeNullable(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private long resolveAdresseIdFromPacs008(MxPacs00800108 mx) {
@@ -494,27 +786,88 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                 || mx.getFIToFICstmrCdtTrf().getCdtTrfTxInf().isEmpty()) {
             return DEFAULT_ID_ADRESSE;
         }
-        com.prowidesoftware.swift.model.mx.dic.CreditTransferTransaction39 tx =
-                mx.getFIToFICstmrCdtTrf().getCdtTrfTxInf().get(0);
-        com.prowidesoftware.swift.model.mx.dic.PostalAddress24 pstlAdr = null;
-        long idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
-        // 1) Adresse créditeur (bénéficiaire) si disponible → CDTR (2)
-        if (tx.getCdtr() != null && tx.getCdtr().getPstlAdr() != null) {
-            pstlAdr = tx.getCdtr().getPstlAdr();
-            idTypeAdresse = ID_TYPE_ADRESSE_CDTR;
+        for (com.prowidesoftware.swift.model.mx.dic.CreditTransferTransaction39 tx : mx.getFIToFICstmrCdtTrf().getCdtTrfTxInf()) {
+            com.prowidesoftware.swift.model.mx.dic.PostalAddress24 pstlAdr = null;
+            long idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+            // 1) Adresse créditeur (bénéficiaire) si disponible → CDTR (2)
+            if (tx.getCdtr() != null && tx.getCdtr().getPstlAdr() != null) {
+                pstlAdr = tx.getCdtr().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_CDTR;
+            }
+            // 2) Sinon adresse débiteur → DBTR (1)
+            else if (tx.getDbtr() != null && tx.getDbtr().getPstlAdr() != null) {
+                pstlAdr = tx.getDbtr().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+            }
+            // 3) Sinon adresse de la banque ordonnatrice (agent instigateur)
+            else if (tx.getInstgAgt() != null
+                    && tx.getInstgAgt().getFinInstnId() != null
+                    && tx.getInstgAgt().getFinInstnId().getPstlAdr() != null) {
+                pstlAdr = tx.getInstgAgt().getFinInstnId().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+            }
+            // 4) Sinon adresse de la banque bénéficiaire (agent instruit)
+            else if (tx.getInstdAgt() != null
+                    && tx.getInstdAgt().getFinInstnId() != null
+                    && tx.getInstdAgt().getFinInstnId().getPstlAdr() != null) {
+                pstlAdr = tx.getInstdAgt().getFinInstnId().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_CDTR;
+            }
+            long resolved = resolveAdresseIdFromPostalAdr(pstlAdr, idTypeAdresse);
+            if (resolved != DEFAULT_ID_ADRESSE) {
+                return resolved;
+            }
         }
-        // 2) Sinon adresse débiteur → DBTR (1)
-        else if (tx.getDbtr() != null && tx.getDbtr().getPstlAdr() != null) {
-            pstlAdr = tx.getDbtr().getPstlAdr();
-            idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+        return DEFAULT_ID_ADRESSE;
+    }
+
+    private long safeResolveAdresseIdFromPacs008(MxPacs00800108 mx, String flow) {
+        try {
+            return resolveAdresseIdFromPacs008(mx);
+        } catch (Exception e) {
+            log.warn("{}: erreur résolution adresse PACS008, fallback id_adresse={} ({})",
+                    flow, DEFAULT_ID_ADRESSE, e.getMessage());
+            return DEFAULT_ID_ADRESSE;
         }
-        return resolveAdresseIdFromPostalAdr(pstlAdr, idTypeAdresse);
     }
 
     private long resolveAdresseIdFromPacs009(MxPacs00900108 mx) {
-        // Dans ce schéma Prowide, PACS.009 ne porte pas d'adresse client exploitable
-        // → on garde l'adresse par défaut.
+        if (mx == null || mx.getFICdtTrf() == null
+                || mx.getFICdtTrf().getCdtTrfTxInf() == null
+                || mx.getFICdtTrf().getCdtTrfTxInf().isEmpty()) {
+            return DEFAULT_ID_ADRESSE;
+        }
+        for (com.prowidesoftware.swift.model.mx.dic.CreditTransferTransaction36 tx : mx.getFICdtTrf().getCdtTrfTxInf()) {
+            com.prowidesoftware.swift.model.mx.dic.PostalAddress24 pstlAdr = null;
+            long idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+
+            if (tx.getInstgAgt() != null
+                    && tx.getInstgAgt().getFinInstnId() != null
+                    && tx.getInstgAgt().getFinInstnId().getPstlAdr() != null) {
+                pstlAdr = tx.getInstgAgt().getFinInstnId().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+            } else if (tx.getInstdAgt() != null
+                    && tx.getInstdAgt().getFinInstnId() != null
+                    && tx.getInstdAgt().getFinInstnId().getPstlAdr() != null) {
+                pstlAdr = tx.getInstdAgt().getFinInstnId().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_CDTR;
+            }
+            long resolved = resolveAdresseIdFromPostalAdr(pstlAdr, idTypeAdresse);
+            if (resolved != DEFAULT_ID_ADRESSE) {
+                return resolved;
+            }
+        }
         return DEFAULT_ID_ADRESSE;
+    }
+
+    private long safeResolveAdresseIdFromPacs009(MxPacs00900108 mx, String flow) {
+        try {
+            return resolveAdresseIdFromPacs009(mx);
+        } catch (Exception e) {
+            log.warn("{}: erreur résolution adresse PACS009, fallback id_adresse={} ({})",
+                    flow, DEFAULT_ID_ADRESSE, e.getMessage());
+            return DEFAULT_ID_ADRESSE;
+        }
     }
 
     /**
@@ -528,6 +881,15 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     }
 
     private void createHistoFromVirement(VirementEmis v) {
+        Optional<VirementEmisHisto> existing = virementEmisHistoRepository
+                .findTopByIdVrtEmisOrderByDateHistorisationDesc(v.getIdVrtEmis());
+        if (existing.isPresent()) {
+            VirementEmisHisto row = existing.get();
+            row.setDateHistorisation(OffsetDateTime.now());
+            virementEmisHistoRepository.save(row);
+            return;
+        }
+
         VirementEmisHisto h = new VirementEmisHisto();
         h.setIdVrtEmisHisto(virementEmisHistoRepository.nextIdVrtEmisHisto());
         h.setIdVrtEmis(v.getIdVrtEmis());

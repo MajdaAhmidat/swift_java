@@ -31,11 +31,19 @@ public class EntityMapper {
         dto.setIdUser(e.getIdUser());
         dto.setIdRoleRole(e.getIdRoleRole());
         dto.setLogin(e.getLogin());
-        dto.setMotdepasse(e.getMotdepasse());
-        dto.setRoleId(e.getRoleId());
+        dto.setMotdepasse(null); // ne jamais exposer le mot de passe (même hash)
         dto.setActif(e.getActif());
         dto.setCreatedAt(e.getCreatedAt());
-        if (e.getRole() != null) dto.setRoleCode(e.getRole().getCode());
+        dto.setNom(e.getNom());
+        dto.setPrenom(e.getPrenom());
+        dto.setTelephone(e.getTelephone());
+        dto.setDepartement(e.getDepartement());
+        dto.setPoste(e.getPoste());
+        dto.setStatut(e.getStatut());
+        if (e.getRole() != null) {
+            dto.setRoleCode(e.getRole().getCode());
+            dto.setRoleId(e.getRole().getIdRole());
+        }
         return dto;
     }
 
@@ -43,12 +51,18 @@ public class EntityMapper {
         if (dto == null) return null;
         Utilisateur e = new Utilisateur();
         e.setIdUser(dto.getIdUser());
-        e.setIdRoleRole(dto.getIdRoleRole());
+        Integer idRole = dto.getIdRoleRole() != null ? dto.getIdRoleRole() : dto.getRoleId();
+        if (idRole != null) e.setIdRoleRole(idRole);
         e.setLogin(dto.getLogin());
         e.setMotdepasse(dto.getMotdepasse());
-        e.setRoleId(dto.getRoleId());
         e.setActif(dto.getActif() != null ? dto.getActif() : true);
         e.setCreatedAt(dto.getCreatedAt());
+        e.setNom(dto.getNom());
+        e.setPrenom(dto.getPrenom());
+        e.setTelephone(dto.getTelephone());
+        e.setDepartement(dto.getDepartement());
+        e.setPoste(dto.getPoste());
+        e.setStatut(dto.getStatut());
         return e;
     }
 
@@ -232,6 +246,7 @@ public class EntityMapper {
         dto.setBicBeneficiaire(e.getBicBeneficiaire());
         dto.setUetr(e.getUetr());
         dto.setEndToEnd(e.getEndToEnd());
+        dto.setStatutRapprochement(e.getStatutRecu());
         return dto;
     }
 
@@ -258,6 +273,7 @@ public class EntityMapper {
         e.setBicBeneficiaire(dto.getBicBeneficiaire());
         e.setUetr(dto.getUetr());
         e.setEndToEnd(dto.getEndToEnd());
+        e.setStatutRecu(dto.getStatutRapprochement());
         if (dto.getIdStatutStatut() != null) e.setIdStatut(dto.getIdStatutStatut());
         if (dto.getIdAdresseAdresse() != null) e.setIdAdresse(dto.getIdAdresseAdresse());
         if (dto.getCodeMsgTypeMessage() != null) e.setIdTypeMessage(dto.getCodeMsgTypeMessage());

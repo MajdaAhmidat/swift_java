@@ -8,7 +8,7 @@ import java.util.Properties;
 import java.util.stream.Collectors;
 
 /**
- * Charge application.properties et expose les répertoires (comme le convertisseur).
+ * Charge application.properties et expose les répertoires
  */
 public final class PropertiesLoader {
 
@@ -34,10 +34,7 @@ public final class PropertiesLoader {
         return properties.getProperty(key);
     }
 
-    /**
-     * Retourne la liste des répertoires pour la clé (séparés par des virgules dans application.properties).
-     * Ex. input.mx.directory=IN ou EBICS/input/mx,TOS/input/mx
-     */
+
     public static List<String> getDirectories(String key) {
         String dirs = properties.getProperty(key);
         if (dirs == null || dirs.trim().isEmpty()) {

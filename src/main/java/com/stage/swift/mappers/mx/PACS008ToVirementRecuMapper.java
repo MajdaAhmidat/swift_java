@@ -12,9 +12,6 @@ import java.time.LocalDate;
 import static com.stage.swift.helpers.MxMapperHelper.truncate;
 import static com.stage.swift.helpers.MxMapperHelper.parseLocalDate;
 
-/**
- * Mapper PACS 008 -> VirementRecu (flux recu OUT_SAA).
- */
 @Component
 public class PACS008ToVirementRecuMapper {
 

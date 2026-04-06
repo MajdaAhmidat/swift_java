@@ -33,6 +33,10 @@ public class VirementEmisServiceImpl implements VirementEmisService {
 
     @Override
     public VirementEmis save(VirementEmis entity) {
+        if (entity != null) {
+            String uetr = entity.getUetr() != null ? entity.getUetr().trim() : "";
+            entity.setUetr(uetr);
+        }
         return repository.save(entity);
     }
 

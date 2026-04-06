@@ -11,6 +11,8 @@ public interface UtilisateurService {
 
     Optional<Utilisateur> findById(Utilisateur.UtilisateurPK id);
 
+    Optional<Utilisateur> findByIdUser(Integer idUser);
+
     Utilisateur save(Utilisateur entity);
 
     void deleteById(Utilisateur.UtilisateurPK id);

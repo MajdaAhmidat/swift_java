@@ -32,6 +32,7 @@ public class VirementRecuDTO implements Serializable {
     private String bicBeneficiaire;
     private String uetr;
     private String endToEnd;
+    private String statutRapprochement;
 
     public VirementRecuDTO() {}
 
@@ -75,4 +76,6 @@ public class VirementRecuDTO implements Serializable {
     public void setUetr(String uetr) { this.uetr = uetr; }
     public String getEndToEnd() { return endToEnd; }
     public void setEndToEnd(String endToEnd) { this.endToEnd = endToEnd; }
+    public String getStatutRapprochement() { return statutRapprochement; }
+    public void setStatutRapprochement(String statutRapprochement) { this.statutRapprochement = statutRapprochement; }
 }

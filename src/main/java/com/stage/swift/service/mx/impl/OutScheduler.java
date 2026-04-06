@@ -9,18 +9,16 @@ import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Scheduler flux reçu (OUT) : OUT_SAA (.ack) puis OUT_SOP (.xml).
- * - OUT_SAA : crée VirementRecu + MessageRecu → SAVE_SAA / ERREUR_SAA
- * - OUT_SOP : met à jour statut VirementRecu → SAVE_SOP / ERREUR_SOP
- */
+
 @Component
 public class OutScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(OutScheduler.class);
 
     private final OutDocumentProcessorService outDocumentProcessorService;
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     public OutScheduler(OutDocumentProcessorService outDocumentProcessorService) {
         this.outDocumentProcessorService = outDocumentProcessorService;
@@ -28,6 +26,11 @@ public class OutScheduler {
 
     @Scheduled(initialDelayString = "${batch.poll.initial.delay.ms:3000}", fixedDelayString = "${batch.poll.delay.ms:10000}")
     public void pollOutDirectories() {
+        if (!running.compareAndSet(false, true)) {
+            log.warn("[OutScheduler] Polling ignoré: un traitement est déjà en cours");
+            return;
+        }
+        try {
         String baseDir = getBaseDirectory();
         log.info("[OutScheduler] Polling OUT (base={})", baseDir);
 
@@ -51,6 +54,9 @@ public class OutScheduler {
                 log.info("[OutScheduler] Traitement OUT_SOP .xml dans: {}", path);
                 outDocumentProcessorService.processOutSop(path);
             }
+        }
+        } finally {
+            running.set(false);
         }
     }
 

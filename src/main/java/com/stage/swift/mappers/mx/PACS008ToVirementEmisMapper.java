@@ -13,17 +13,9 @@ import java.util.List;
 import static com.stage.swift.helpers.MxMapperHelper.truncate;
 import static com.stage.swift.helpers.MxMapperHelper.parseLocalDate;
 
-/**
- * Mapper PACS 008 → VirementEmis à partir des chemins documentés :
- * MsgId, Cdtr/Nm, CdtrAcct/Id/Othr/Id, DbtrAcct/Id/Othr/Id, Dbtr/Nm,
- * IntrBkSttlmAmt, IntrBkSttlmDt, RmtInf (Document/FIToFICstmrCdtTrf/...).
- */
 @Component
 public class PACS008ToVirementEmisMapper {
 
-    /**
-     * Construit un VirementEmis à partir du XML PACS 008 (getters = XPaths fournis).
-     */
     public VirementEmis toVirementEmis(MxPacs00800108 mx, Long nextIdVrtEmis,
                                       long defaultIdStatut, long defaultIdAdresse, long defaultIdSop, long defaultCodeBic,
                                       long codeMsgTypeMessage) {

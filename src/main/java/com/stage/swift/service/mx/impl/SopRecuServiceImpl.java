@@ -55,12 +55,25 @@ public class SopRecuServiceImpl implements SopRecuService {
                 list = virementRecuRepository.findByReference(refTrim);
             }
             if (!list.isEmpty()) {
+                int updated = 0;
+                int unchanged = 0;
                 for (VirementRecu v : list) {
+                    String currentStatut = v.getStatutRecu() != null ? v.getStatutRecu().trim() : "";
+                    if (currentStatut.equalsIgnoreCase(statutRapprochement)) {
+                        unchanged++;
+                        continue;
+                    }
                     v.setStatutRecu(statutRapprochement);
                     virementRecuService.save(v);
+                    updated++;
                 }
-                log.info("OUT_SOP: reference={}, colonne statut mise à jour ({}), {} virement(s) recu",
-                        refTrim, statutRapprochement, list.size());
+                if (updated == 0) {
+                    log.info("OUT_SOP ignoré (idempotent): reference={}, statut déjà ({}), {} virement(s) inchangé(s)",
+                            refTrim, statutRapprochement, unchanged);
+                } else {
+                    log.info("OUT_SOP: reference={}, colonne statut mise à jour ({}), {} virement(s) recu, {} inchangé(s)",
+                            refTrim, statutRapprochement, updated, unchanged);
+                }
                 return;
             }
         }

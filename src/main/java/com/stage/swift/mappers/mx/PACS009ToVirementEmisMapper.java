@@ -13,9 +13,7 @@ import java.time.LocalDate;
 import static com.stage.swift.helpers.MxMapperHelper.truncate;
 import static com.stage.swift.helpers.MxMapperHelper.parseLocalDate;
 
-/**
- * Mapper PACS 009 → VirementEmis (tout en virement_emis / message_emis).
- */
+
 @Component
 public class PACS009ToVirementEmisMapper {
 

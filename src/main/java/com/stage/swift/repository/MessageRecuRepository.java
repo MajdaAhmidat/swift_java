@@ -10,4 +10,6 @@ public interface MessageRecuRepository extends JpaRepository<MessageRecu, Messag
 
     @Query("SELECT COALESCE(MAX(m.idMsgRecu), 0) + 1 FROM MessageRecu m")
     Long nextIdMsgRecu();
+
+    boolean existsByIdVrtRecuVirementRecu(Long idVrtRecuVirementRecu);
 }

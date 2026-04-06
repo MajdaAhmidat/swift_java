@@ -38,8 +38,8 @@ public class MessageRecu {
     @Column(name = "sop", nullable = false)
     private Long sop;
 
-    /** MESSAGE_RECU has_one VIREMENT_RECU (owning side with FK) */
-    @OneToOne(fetch = FetchType.LAZY)
+    /** Plusieurs MESSAGE_RECU peuvent pointer vers le même VIREMENT_RECU. */
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumns({
             @JoinColumn(name = "id_vrt_recu_virement_recu", referencedColumnName = "id_vrt_recu", insertable = false, updatable = false),
             @JoinColumn(name = "id_statut_statut_virement_recu", referencedColumnName = "id_statut", insertable = false, updatable = false),

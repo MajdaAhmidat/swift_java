@@ -12,19 +12,30 @@ import com.stage.swift.mappers.mx.PACS008ToVirementRecuMapper;
 import com.stage.swift.mappers.mx.PACS009ToVirementRecuMapper;
 import com.stage.swift.repository.AdresseRepository;
 import com.stage.swift.repository.MessageRecuRepository;
+import com.stage.swift.repository.SopRepository;
 import com.stage.swift.repository.VirementRecuHistoRepository;
 import com.stage.swift.repository.VirementRecuRepository;
 import com.stage.swift.service.entity.MessageRecuService;
 import com.stage.swift.service.entity.VirementRecuService;
 import com.stage.swift.service.mx.AckRecuService;
+import com.stage.swift.service.mx.MessageXmlArchiveService;
 import com.stage.swift.service.ref.ReferenceDataResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
+
+import java.util.Optional;
 
 import javax.persistence.EntityManager;
 import javax.persistence.PersistenceContext;
+import javax.xml.parsers.DocumentBuilderFactory;
+import java.io.StringReader;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,21 +44,24 @@ import java.util.regex.Pattern;
 import static com.stage.swift.helpers.MxMapperHelper.truncate;
 
 /**
- * Flux reçu OUT_SAA : crée VirementRecu + MessageRecu depuis le .ack (tous champs sauf statut final).
- * Le statut est mis à jour plus tard par le SOP (OUT_SOP).
+ * Flux reçu OUT_SAA
  */
 @Service
 public class AckRecuServiceImpl implements AckRecuService {
 
     private static final Logger log = LoggerFactory.getLogger(AckRecuServiceImpl.class);
 
-    private static final long DEFAULT_ID_ADRESSE = 1L;
+    private static final long DEFAULT_ID_ADRESSE = 0L;
     private static final long CODE_MSG_PACS008 = 1L;
     private static final long CODE_MSG_PACS009 = 2L;
     private static final long ID_VIREMENT_EMIS_NON_RAPPROCHE = 0L;
     /** type_adresse : 1 = DBTR (débiteur), 2 = CDTR (créditeur) */
     private static final long ID_TYPE_ADRESSE_DBTR = 1L;
     private static final long ID_TYPE_ADRESSE_CDTR = 2L;
+    private static final long DEFAULT_ID_SOP = 1L;
+    private static final Pattern SOP_XML_PATTERN = Pattern.compile(
+            "<(?:[A-Za-z0-9_\\-]+:)?(?:SOP|SystemOperant|SystemeOperant|BizSvc|BusinessService)(?:\\s+[^>]*)?>\\s*([^<]+?)\\s*</(?:[A-Za-z0-9_\\-]+:)?(?:SOP|SystemOperant|SystemeOperant|BizSvc|BusinessService)\\s*>",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
     private final VirementRecuRepository virementRecuRepository;
     private final VirementRecuHistoRepository virementRecuHistoRepository;
@@ -58,6 +72,8 @@ public class AckRecuServiceImpl implements AckRecuService {
     private final PACS009ToVirementRecuMapper pacs009ToVirementRecuMapper;
     private final ReferenceDataResolver referenceDataResolver;
     private final AdresseRepository adresseRepository;
+    private final SopRepository sopRepository;
+    private final MessageXmlArchiveService messageXmlArchiveService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -70,7 +86,9 @@ public class AckRecuServiceImpl implements AckRecuService {
                               PACS008ToVirementRecuMapper pacs008ToVirementRecuMapper,
                               PACS009ToVirementRecuMapper pacs009ToVirementRecuMapper,
                               ReferenceDataResolver referenceDataResolver,
-                              AdresseRepository adresseRepository) {
+                              AdresseRepository adresseRepository,
+                              SopRepository sopRepository,
+                              MessageXmlArchiveService messageXmlArchiveService) {
         this.virementRecuRepository = virementRecuRepository;
         this.virementRecuHistoRepository = virementRecuHistoRepository;
         this.messageRecuRepository = messageRecuRepository;
@@ -80,6 +98,8 @@ public class AckRecuServiceImpl implements AckRecuService {
         this.pacs009ToVirementRecuMapper = pacs009ToVirementRecuMapper;
         this.referenceDataResolver = referenceDataResolver;
         this.adresseRepository = adresseRepository;
+        this.sopRepository = sopRepository;
+        this.messageXmlArchiveService = messageXmlArchiveService;
     }
 
     @Override
@@ -87,6 +107,9 @@ public class AckRecuServiceImpl implements AckRecuService {
     public void processAckFileRecu(String ackContent) {
         if (ackContent == null || ackContent.trim().isEmpty()) {
             throw new IllegalArgumentException("Contenu .ack recu vide");
+        }
+        if (!adresseRepository.findById(DEFAULT_ID_ADRESSE).isPresent()) {
+            throw new IllegalArgumentException("Donnée de référence manquante: adresse(id=0) introuvable");
         }
         if (hasMultipleXmlDeclarations(ackContent)) {
             List<String> singleDocs = splitIntoSingleXmlDocuments(ackContent);
@@ -174,10 +197,16 @@ public class AckRecuServiceImpl implements AckRecuService {
                 ((pstlAdr.getStrtNm() != null) ? pstlAdr.getStrtNm() : "") +
                         ((pstlAdr.getBldgNb() != null) ? " " + pstlAdr.getBldgNb() : ""),
                 255);
-        String ligne2 = null;
-        String ville = truncate(pstlAdr.getTwnNm() != null ? pstlAdr.getTwnNm() : "", 150);
+        String ligne2 = truncate(
+                ((pstlAdr.getFlr() != null) ? pstlAdr.getFlr() : "") +
+                        ((pstlAdr.getPstBx() != null) ? " " + pstlAdr.getPstBx() : "") +
+                        ((pstlAdr.getDept() != null) ? " " + pstlAdr.getDept() : "") +
+                        ((pstlAdr.getSubDept() != null) ? " " + pstlAdr.getSubDept() : "") +
+                        ((pstlAdr.getDstrctNm() != null) ? " " + pstlAdr.getDstrctNm() : ""),
+                255);
+        String ville = truncate(pstlAdr.getTwnNm() != null ? pstlAdr.getTwnNm() : pstlAdr.getTwnLctnNm(), 150);
         String codePostal = truncate(pstlAdr.getPstCd() != null ? pstlAdr.getPstCd() : "", 20);
-        String pays = truncate(pstlAdr.getCtry() != null ? pstlAdr.getCtry() : "", 100);
+        String pays = truncate(pstlAdr.getCtry() != null ? pstlAdr.getCtry() : pstlAdr.getCtrySubDvsn(), 100);
 
         java.util.List<String> adrLines = pstlAdr.getAdrLine();
         if (adrLines != null && !adrLines.isEmpty()) {
@@ -200,29 +229,39 @@ public class AckRecuServiceImpl implements AckRecuService {
             return DEFAULT_ID_ADRESSE;
         }
 
-        final String fLigne1 = ligne1;
-        final String fLigne2 = ligne2;
-        final String fVille = ville;
-        final String fCodePostal = codePostal;
-        final String fPays = pays;
+        final String fLigne1 = normalizeNullable(ligne1);
+        final String fLigne2 = normalizeNullable(ligne2);
+        final String fVille = normalizeNullable(ville);
+        final String fCodePostal = normalizeNullable(codePostal);
+        final String fPays = normalizeNullable(pays);
         final long fIdTypeAdresse = idTypeAdresse;
 
+        // Priorité: réutiliser la même adresse textuelle (même ID) même si le type DBTR/CDTR diffère.
         return adresseRepository
-                .findByLigne1AndLigne2AndVilleAndCodePostalAndPaysAndIdTypeAdresse(fLigne1, fLigne2, fVille, fCodePostal, fPays, fIdTypeAdresse)
+                .findByLigne1AndLigne2AndVilleAndCodePostalAndPays(fLigne1, fLigne2, fVille, fCodePostal, fPays)
                 .map(Adresse::getIdAdresse)
-                .orElseGet(() -> {
-                    Long nextId = adresseRepository.nextIdAdresse();
-                    Adresse a = new Adresse();
-                    a.setIdAdresse(nextId);
-                    a.setLigne1(fLigne1);
-                    a.setLigne2(fLigne2);
-                    a.setVille(fVille);
-                    a.setCodePostal(fCodePostal);
-                    a.setPays(fPays);
-                    a.setIdTypeAdresse(fIdTypeAdresse);
-                    adresseRepository.save(a);
-                    return nextId;
-                });
+                .orElseGet(() -> adresseRepository
+                        .findByLigne1AndLigne2AndVilleAndCodePostalAndPaysAndIdTypeAdresse(fLigne1, fLigne2, fVille, fCodePostal, fPays, fIdTypeAdresse)
+                        .map(Adresse::getIdAdresse)
+                        .orElseGet(() -> {
+                            Long nextId = adresseRepository.nextIdAdresse();
+                            Adresse a = new Adresse();
+                            a.setIdAdresse(nextId);
+                            a.setLigne1(fLigne1);
+                            a.setLigne2(fLigne2);
+                            a.setVille(fVille);
+                            a.setCodePostal(fCodePostal);
+                            a.setPays(fPays);
+                            a.setIdTypeAdresse(fIdTypeAdresse);
+                            adresseRepository.save(a);
+                            return nextId;
+                        }));
+    }
+
+    private static String normalizeNullable(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private long resolveAdresseIdFromPacs008(MxPacs00800108 mx) {
@@ -231,24 +270,93 @@ public class AckRecuServiceImpl implements AckRecuService {
                 || mx.getFIToFICstmrCdtTrf().getCdtTrfTxInf().isEmpty()) {
             return DEFAULT_ID_ADRESSE;
         }
-        com.prowidesoftware.swift.model.mx.dic.CreditTransferTransaction39 tx =
-                mx.getFIToFICstmrCdtTrf().getCdtTrfTxInf().get(0);
-        com.prowidesoftware.swift.model.mx.dic.PostalAddress24 pstlAdr = null;
-        long idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
-        if (tx.getCdtr() != null && tx.getCdtr().getPstlAdr() != null) {
-            pstlAdr = tx.getCdtr().getPstlAdr();
-            idTypeAdresse = ID_TYPE_ADRESSE_CDTR;
-        } else if (tx.getDbtr() != null && tx.getDbtr().getPstlAdr() != null) {
-            pstlAdr = tx.getDbtr().getPstlAdr();
-            idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+        for (com.prowidesoftware.swift.model.mx.dic.CreditTransferTransaction39 tx : mx.getFIToFICstmrCdtTrf().getCdtTrfTxInf()) {
+            com.prowidesoftware.swift.model.mx.dic.PostalAddress24 pstlAdr = null;
+            long idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+            if (tx.getCdtr() != null && tx.getCdtr().getPstlAdr() != null) {
+                pstlAdr = tx.getCdtr().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_CDTR;
+            } else if (tx.getDbtr() != null && tx.getDbtr().getPstlAdr() != null) {
+                pstlAdr = tx.getDbtr().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+            } else if (tx.getInstgAgt() != null
+                    && tx.getInstgAgt().getFinInstnId() != null
+                    && tx.getInstgAgt().getFinInstnId().getPstlAdr() != null) {
+                pstlAdr = tx.getInstgAgt().getFinInstnId().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+            } else if (tx.getInstdAgt() != null
+                    && tx.getInstdAgt().getFinInstnId() != null
+                    && tx.getInstdAgt().getFinInstnId().getPstlAdr() != null) {
+                pstlAdr = tx.getInstdAgt().getFinInstnId().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_CDTR;
+            }
+            long resolved = safeResolveAdresseIdFromPostalAdr(pstlAdr, idTypeAdresse, "OUT_SAA PACS008");
+            if (resolved != DEFAULT_ID_ADRESSE) {
+                return resolved;
+            }
         }
-        return resolveAdresseIdFromPostalAdr(pstlAdr, idTypeAdresse);
+        return DEFAULT_ID_ADRESSE;
     }
 
     private long resolveAdresseIdFromPacs009(MxPacs00900108 mx) {
-        // Dans ce schéma Prowide, PACS.009 ne porte pas d'adresse client exploitable
-        // → on garde l'adresse par défaut.
+        if (mx == null || mx.getFICdtTrf() == null
+                || mx.getFICdtTrf().getCdtTrfTxInf() == null
+                || mx.getFICdtTrf().getCdtTrfTxInf().isEmpty()) {
+            return DEFAULT_ID_ADRESSE;
+        }
+        for (com.prowidesoftware.swift.model.mx.dic.CreditTransferTransaction36 tx : mx.getFICdtTrf().getCdtTrfTxInf()) {
+            com.prowidesoftware.swift.model.mx.dic.PostalAddress24 pstlAdr = null;
+            long idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+
+            if (tx.getInstgAgt() != null
+                    && tx.getInstgAgt().getFinInstnId() != null
+                    && tx.getInstgAgt().getFinInstnId().getPstlAdr() != null) {
+                pstlAdr = tx.getInstgAgt().getFinInstnId().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_DBTR;
+            } else if (tx.getInstdAgt() != null
+                    && tx.getInstdAgt().getFinInstnId() != null
+                    && tx.getInstdAgt().getFinInstnId().getPstlAdr() != null) {
+                pstlAdr = tx.getInstdAgt().getFinInstnId().getPstlAdr();
+                idTypeAdresse = ID_TYPE_ADRESSE_CDTR;
+            }
+            long resolved = safeResolveAdresseIdFromPostalAdr(pstlAdr, idTypeAdresse, "OUT_SAA PACS009");
+            if (resolved != DEFAULT_ID_ADRESSE) {
+                return resolved;
+            }
+        }
         return DEFAULT_ID_ADRESSE;
+    }
+
+    private long safeResolveAdresseIdFromPostalAdr(com.prowidesoftware.swift.model.mx.dic.PostalAddress24 pstlAdr,
+                                                   long idTypeAdresse,
+                                                   String flow) {
+        try {
+            return resolveAdresseIdFromPostalAdr(pstlAdr, idTypeAdresse);
+        } catch (Exception e) {
+            log.warn("{}: erreur résolution adresse depuis PostalAdr, fallback id_adresse={} ({})",
+                    flow, DEFAULT_ID_ADRESSE, e.getMessage());
+            return DEFAULT_ID_ADRESSE;
+        }
+    }
+
+    private long safeResolveAdresseIdFromPacs008(MxPacs00800108 mx, String flow) {
+        try {
+            return resolveAdresseIdFromPacs008(mx);
+        } catch (Exception e) {
+            log.warn("{}: erreur résolution adresse PACS008, fallback id_adresse={} ({})",
+                    flow, DEFAULT_ID_ADRESSE, e.getMessage());
+            return DEFAULT_ID_ADRESSE;
+        }
+    }
+
+    private long safeResolveAdresseIdFromPacs009(MxPacs00900108 mx, String flow) {
+        try {
+            return resolveAdresseIdFromPacs009(mx);
+        } catch (Exception e) {
+            log.warn("{}: erreur résolution adresse PACS009, fallback id_adresse={} ({})",
+                    flow, DEFAULT_ID_ADRESSE, e.getMessage());
+            return DEFAULT_ID_ADRESSE;
+        }
     }
 
     private static String extractBicFromCamt054Tx(com.prowidesoftware.swift.model.mx.dic.EntryTransaction10 tx) {
@@ -288,19 +396,59 @@ public class AckRecuServiceImpl implements AckRecuService {
                     if (ed.getTxDtls() == null) continue;
                     for (com.prowidesoftware.swift.model.mx.dic.EntryTransaction10 tx : ed.getTxDtls()) {
                         String bicCode = extractBicFromCamt054Tx(tx);
-                        long idSop = referenceDataResolver.resolveSopIdFromBic(bicCode != null ? bicCode : "");
+                        long idSop = resolveSopIdFromBusinessSource(xmlToParse, "OUT_SAA CAMT054");
                         long idStatutStatut = referenceDataResolver.resolveStatutIdByCode("INTEGRE");
                         long codeBic = referenceDataResolver.resolveCodeBicFromBic(bicCode != null ? bicCode : "");
                         Long nextIdRecu = virementRecuRepository.nextIdVrtRecu();
                         VirementRecu v = mapCamt054TxToVirementRecu(tx, ntry, grpMsgId, nextIdRecu, idSop, idStatutStatut, codeBic);
-                        virementRecuService.save(v);
+                        validateUetrForRecu(v, "OUT_SAA CAMT054");
+                        // Idempotence CAMT054 basée uniquement sur UETR.
+                        Optional<VirementRecu> existingOpt = virementRecuRepository
+                                .findByUetrForDedup(v.getUetr(), PageRequest.of(0, 1))
+                                .stream()
+                                .findFirst();
+                        VirementRecu entityToPersist = existingOpt
+                                .map(existing -> {
+                                    existing.setMontant(v.getMontant());
+                                    existing.setCodeDevise(v.getCodeDevise());
+                                    existing.setDateValeur(v.getDateValeur());
+                                    existing.setDateIntegration(v.getDateIntegration());
+                                    existing.setDenominationOrd(v.getDenominationOrd());
+                                    existing.setDenominationBnf(v.getDenominationBnf());
+                                    existing.setNumCompteOrd(v.getNumCompteOrd());
+                                    existing.setNumCompteBnf(v.getNumCompteBnf());
+                                    existing.setBicOrdonnateur(v.getBicOrdonnateur());
+                                    existing.setBicBeneficiaire(v.getBicBeneficiaire());
+                                    existing.setRenseignement(v.getRenseignement());
+                                    existing.setUetr(v.getUetr());
+                                    existing.setEndToEnd(v.getEndToEnd());
+                                    existing.setStatutRecu(v.getStatutRecu());
+                                    return existing;
+                                })
+                                .orElse(v);
+
+                        virementRecuService.save(entityToPersist);
+                        messageXmlArchiveService.archiveForVirementRecu(
+                                entityToPersist.getIdVrtRecu(),
+                                "RECU",
+                                "camt.054.001.08",
+                                xmlToParse
+                        );
+                        syncAdresseForExistingRecu(existingOpt, v, entityToPersist);
                         entityManager.flush();
-                        MessageRecu m = mapToMessageRecu(v, tx.getRefs() != null ? tx.getRefs().getMsgId() : grpMsgId);
-                        m.setIdMsgRecu(messageRecuRepository.nextIdMsgRecu());
-                        messageRecuService.save(m);
-                        createHistoFromVirementRecu(v, ID_VIREMENT_EMIS_NON_RAPPROCHE);
-                        entityManager.flush();
-                        log.info("OUT_SAA CAMT054: VirementRecu + MessageRecu + VirementRecuHisto créés, idVrtRecu={}", v.getIdVrtRecu());
+                        // Historiser chaque création et chaque modification.
+                        createHistoFromVirementRecu(entityToPersist, ID_VIREMENT_EMIS_NON_RAPPROCHE);
+                        if (!existingOpt.isPresent() && !messageRecuRepository.existsByIdVrtRecuVirementRecu(entityToPersist.getIdVrtRecu())) {
+                            MessageRecu m = mapToMessageRecu(entityToPersist, tx.getRefs() != null ? tx.getRefs().getMsgId() : grpMsgId);
+                            m.setIdMsgRecu(messageRecuRepository.nextIdMsgRecu());
+                            messageRecuService.save(m);
+                            entityManager.flush();
+                        } else if (!existingOpt.isPresent()) {
+                            log.warn("OUT_SAA CAMT054: MessageRecu déjà existant pour idVrtRecu={}, insertion ignorée", entityToPersist.getIdVrtRecu());
+                        }
+                        log.info("OUT_SAA CAMT054: VirementRecu {}, idVrtRecu={}",
+                                existingOpt.isPresent() ? "actualisé + historisé" : "créé + historisé (MessageRecu si absent)",
+                                entityToPersist.getIdVrtRecu());
                     }
                 }
             }
@@ -324,7 +472,7 @@ public class AckRecuServiceImpl implements AckRecuService {
                 && tx.getRltdPties().getDbtr().getPty() != null) {
             pstlAdr = tx.getRltdPties().getDbtr().getPty().getPstlAdr();
         }
-        long idAdresse = resolveAdresseIdFromPostalAdr(pstlAdr, ID_TYPE_ADRESSE_DBTR);
+        long idAdresse = safeResolveAdresseIdFromPostalAdr(pstlAdr, ID_TYPE_ADRESSE_DBTR, "OUT_SAA CAMT054");
 
         VirementRecu v = new VirementRecu();
         v.setIdVrtRecu(nextIdRecu);
@@ -388,10 +536,10 @@ public class AckRecuServiceImpl implements AckRecuService {
             if (messageType == MessageMX.PACS008) {
                 MxPacs00800108 mx = MxPacs00800108.parse(xmlToParse);
                 String bicCode = extractBicFromPacs008(mx);
-                long idSop = referenceDataResolver.resolveSopIdFromBic(bicCode != null ? bicCode : "");
+                long idSop = resolveSopIdFromBusinessSource(xmlToParse, "OUT_SAA PACS008");
                 long idStatutStatut = referenceDataResolver.resolveStatutIdByCode("INTEGRE");
                 long codeBic = referenceDataResolver.resolveCodeBicFromBic(bicCode != null ? bicCode : "");
-                long idAdresse = resolveAdresseIdFromPacs008(mx);
+                long idAdresse = safeResolveAdresseIdFromPacs008(mx, "OUT_SAA PACS008");
                 String msgId = mx.getFIToFICstmrCdtTrf() != null && mx.getFIToFICstmrCdtTrf().getGrpHdr() != null
                         ? mx.getFIToFICstmrCdtTrf().getGrpHdr().getMsgId() : null;
                 Long nextIdRecu = virementRecuRepository.nextIdVrtRecu();
@@ -399,22 +547,62 @@ public class AckRecuServiceImpl implements AckRecuService {
                         idStatutStatut, idAdresse, idSop, codeBic, CODE_MSG_PACS008);
                 // Statut rapprochement initial côté reçu : INTEGRE
                 v.setStatutRecu("INTEGRE");
-                virementRecuService.save(v);
+                validateUetrForRecu(v, "OUT_SAA PACS008");
+
+                // Idempotence basée uniquement sur UETR.
+                Optional<VirementRecu> existingOpt = virementRecuRepository
+                        .findByUetrForDedup(v.getUetr(), PageRequest.of(0, 1))
+                        .stream()
+                        .findFirst();
+                VirementRecu entityToPersist = existingOpt
+                        .map(existing -> {
+                            existing.setMontant(v.getMontant());
+                            existing.setCodeDevise(v.getCodeDevise());
+                            existing.setDateValeur(v.getDateValeur());
+                            existing.setDateIntegration(v.getDateIntegration());
+                            existing.setDenominationOrd(v.getDenominationOrd());
+                            existing.setDenominationBnf(v.getDenominationBnf());
+                            existing.setNumCompteOrd(v.getNumCompteOrd());
+                            existing.setNumCompteBnf(v.getNumCompteBnf());
+                            existing.setBicOrdonnateur(v.getBicOrdonnateur());
+                            existing.setBicBeneficiaire(v.getBicBeneficiaire());
+                            existing.setRenseignement(v.getRenseignement());
+                            existing.setUetr(v.getUetr());
+                            existing.setEndToEnd(v.getEndToEnd());
+                            existing.setStatutRecu(v.getStatutRecu());
+                            return existing;
+                        })
+                        .orElse(v);
+
+                virementRecuService.save(entityToPersist);
+                messageXmlArchiveService.archiveForVirementRecu(
+                        entityToPersist.getIdVrtRecu(),
+                        "RECU",
+                        "pacs.008.001.08",
+                        xmlToParse
+                );
+                syncAdresseForExistingRecu(existingOpt, v, entityToPersist);
                 entityManager.flush();
-                MessageRecu m = mapToMessageRecu(v, msgId);
-                m.setIdMsgRecu(messageRecuRepository.nextIdMsgRecu());
-                messageRecuService.save(m);
-                createHistoFromVirementRecu(v, ID_VIREMENT_EMIS_NON_RAPPROCHE);
-                entityManager.flush();
-                log.info("OUT_SAA PACS008: VirementRecu + MessageRecu + VirementRecuHisto créés, idVrtRecu={}", v.getIdVrtRecu());
+                // Historiser chaque création et chaque modification.
+                createHistoFromVirementRecu(entityToPersist, ID_VIREMENT_EMIS_NON_RAPPROCHE);
+                // Ne créer MessageRecu et histo que pour un nouveau VirementRecu (évite doublons et "More than one row").
+                if (!existingOpt.isPresent() && !messageRecuRepository.existsByIdVrtRecuVirementRecu(entityToPersist.getIdVrtRecu())) {
+                    MessageRecu m = mapToMessageRecu(entityToPersist, msgId);
+                    m.setIdMsgRecu(messageRecuRepository.nextIdMsgRecu());
+                    messageRecuService.save(m);
+                    entityManager.flush();
+                } else if (!existingOpt.isPresent()) {
+                    log.warn("OUT_SAA PACS008: MessageRecu déjà existant pour idVrtRecu={}, insertion ignorée", entityToPersist.getIdVrtRecu());
+                }
+                log.info("OUT_SAA PACS008: VirementRecu {}, idVrtRecu={}", existingOpt.isPresent() ? "actualisé + historisé" : "créé + historisé (MessageRecu si absent)", entityToPersist.getIdVrtRecu());
                 return;
             }
             MxPacs00900108 mx = MxPacs00900108.parse(xmlToParse);
             String bicCode = extractBicFromPacs009(mx);
-            long idSop = referenceDataResolver.resolveSopIdFromBic(bicCode != null ? bicCode : "");
+            long idSop = resolveSopIdFromBusinessSource(xmlToParse, "OUT_SAA PACS009");
             long idStatutStatut = referenceDataResolver.resolveStatutIdByCode("INTEGRE");
             long codeBic = referenceDataResolver.resolveCodeBicFromBic(bicCode != null ? bicCode : "");
-            long idAdresse = resolveAdresseIdFromPacs009(mx);
+            long idAdresse = safeResolveAdresseIdFromPacs009(mx, "OUT_SAA PACS009");
             String msgId = mx.getFICdtTrf() != null && mx.getFICdtTrf().getGrpHdr() != null
                     ? mx.getFICdtTrf().getGrpHdr().getMsgId() : null;
             Long nextIdRecu = virementRecuRepository.nextIdVrtRecu();
@@ -422,21 +610,164 @@ public class AckRecuServiceImpl implements AckRecuService {
                     idStatutStatut, idAdresse, idSop, codeBic, CODE_MSG_PACS009);
             // Statut rapprochement initial côté reçu : INTEGRE
             v.setStatutRecu("INTEGRE");
-            virementRecuService.save(v);
+            validateUetrForRecu(v, "OUT_SAA PACS009");
+
+            // Idempotence basée uniquement sur UETR.
+            Optional<VirementRecu> existingOpt = virementRecuRepository
+                    .findByUetrForDedup(v.getUetr(), PageRequest.of(0, 1))
+                    .stream()
+                    .findFirst();
+            VirementRecu entityToPersist = existingOpt
+                    .map(existing -> {
+                        existing.setMontant(v.getMontant());
+                        existing.setCodeDevise(v.getCodeDevise());
+                        existing.setDateValeur(v.getDateValeur());
+                        existing.setDateIntegration(v.getDateIntegration());
+                        existing.setDenominationOrd(v.getDenominationOrd());
+                        existing.setDenominationBnf(v.getDenominationBnf());
+                        existing.setNumCompteOrd(v.getNumCompteOrd());
+                        existing.setNumCompteBnf(v.getNumCompteBnf());
+                        existing.setBicOrdonnateur(v.getBicOrdonnateur());
+                        existing.setBicBeneficiaire(v.getBicBeneficiaire());
+                        existing.setRenseignement(v.getRenseignement());
+                        existing.setUetr(v.getUetr());
+                        existing.setEndToEnd(v.getEndToEnd());
+                        existing.setStatutRecu(v.getStatutRecu());
+                        return existing;
+                    })
+                    .orElse(v);
+
+            virementRecuService.save(entityToPersist);
+            messageXmlArchiveService.archiveForVirementRecu(
+                    entityToPersist.getIdVrtRecu(),
+                    "RECU",
+                    "pacs.009.001.08",
+                    xmlToParse
+            );
+            syncAdresseForExistingRecu(existingOpt, v, entityToPersist);
             entityManager.flush();
-            MessageRecu m = mapToMessageRecu(v, msgId);
-            m.setIdMsgRecu(messageRecuRepository.nextIdMsgRecu());
-            messageRecuService.save(m);
-            createHistoFromVirementRecu(v, ID_VIREMENT_EMIS_NON_RAPPROCHE);
-            entityManager.flush();
-            log.info("OUT_SAA PACS009: VirementRecu + MessageRecu + VirementRecuHisto créés, idVrtRecu={}", v.getIdVrtRecu());
+            // Historiser chaque création et chaque modification.
+            createHistoFromVirementRecu(entityToPersist, ID_VIREMENT_EMIS_NON_RAPPROCHE);
+            if (!existingOpt.isPresent() && !messageRecuRepository.existsByIdVrtRecuVirementRecu(entityToPersist.getIdVrtRecu())) {
+                MessageRecu m = mapToMessageRecu(entityToPersist, msgId);
+                m.setIdMsgRecu(messageRecuRepository.nextIdMsgRecu());
+                messageRecuService.save(m);
+                entityManager.flush();
+            } else if (!existingOpt.isPresent()) {
+                log.warn("OUT_SAA PACS009: MessageRecu déjà existant pour idVrtRecu={}, insertion ignorée", entityToPersist.getIdVrtRecu());
+            }
+            log.info("OUT_SAA PACS009: VirementRecu {}, idVrtRecu={}", existingOpt.isPresent() ? "actualisé + historisé" : "créé + historisé (MessageRecu si absent)", entityToPersist.getIdVrtRecu());
         } catch (Exception e) {
             log.error("Erreur parsing recu {} via Prowide", messageType.getLabel(), e);
             throw new IllegalArgumentException("Erreur parsing MX recu: " + e.getMessage(), e);
         }
     }
 
+    /**
+     * Si le même UETR revient avec une nouvelle adresse, on met à jour id_adresse
+     * sur la même ligne virement_recu (id_vrt_recu constant).
+     */
+    private void syncAdresseForExistingRecu(Optional<VirementRecu> existingOpt,
+                                            VirementRecu incoming,
+                                            VirementRecu persisted) {
+        if (!existingOpt.isPresent() || incoming == null || persisted == null) {
+            return;
+        }
+        Long oldAdresse = existingOpt.get().getIdAdresseAdresse();
+        Long newAdresse = incoming.getIdAdresseAdresse();
+        if (newAdresse == null || java.util.Objects.equals(oldAdresse, newAdresse)) {
+            return;
+        }
+        int updated = virementRecuRepository.updateAdresseByIdVrtRecu(persisted.getIdVrtRecu(), newAdresse);
+        if (updated > 0) {
+            log.info("RECU UETR {}: id_adresse mis à jour {} -> {} sur idVrtRecu={}",
+                    persisted.getUetr(), oldAdresse, newAdresse, persisted.getIdVrtRecu());
+        } else {
+            log.warn("RECU UETR {}: échec mise à jour id_adresse (idVrtRecu={}, old={}, new={})",
+                    persisted.getUetr(), persisted.getIdVrtRecu(), oldAdresse, newAdresse);
+        }
+    }
+
+    private void validateUetrForRecu(VirementRecu incoming, String flow) {
+        String uetr = incoming != null && incoming.getUetr() != null ? incoming.getUetr().trim() : "";
+        if (uetr.isEmpty()) {
+            log.warn("{}: UETR manquant -> message RECU stocké sans idempotence UETR (pas de sync id_adresse par UETR)", flow);
+        }
+        incoming.setUetr(uetr);
+    }
+
+    private long resolveSopIdFromBusinessSource(String xml, String flow) {
+        String sopLibelle = extractFirstSopBusinessValue(xml);
+        if (sopLibelle.isEmpty()) {
+            log.warn("{}: SOP métier introuvable dans le message, fallback id_sop={}", flow, DEFAULT_ID_SOP);
+            return DEFAULT_ID_SOP;
+        }
+        return sopRepository.findByLibelleSopNormalized(sopLibelle)
+                .map(s -> s.getId())
+                .orElseGet(() -> {
+                    log.warn("{}: SOP métier '{}' absent de la table sop, fallback id_sop={}",
+                            flow, sopLibelle, DEFAULT_ID_SOP);
+                    return DEFAULT_ID_SOP;
+                });
+    }
+
+    private String extractFirstSopBusinessValue(String xml) {
+        if (xml == null || xml.trim().isEmpty()) {
+            return "";
+        }
+        String fromDom = extractFirstSopWithDom(xml);
+        if (!fromDom.isEmpty()) {
+            return fromDom;
+        }
+        java.util.regex.Matcher matcher = SOP_XML_PATTERN.matcher(xml);
+        if (!matcher.find()) {
+            return "";
+        }
+        String value = matcher.group(1);
+        return value != null ? value.trim() : "";
+    }
+
+    private String extractFirstSopWithDom(String xml) {
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            try {
+                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+                factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+                factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            } catch (Exception ignored) { }
+            Document doc = factory.newDocumentBuilder().parse(new InputSource(new StringReader(xml)));
+            String[] names = { "SOP", "SystemOperant", "SystemeOperant", "BizSvc", "BusinessService" };
+            for (String name : names) {
+                NodeList nodes = doc.getElementsByTagNameNS("*", name);
+                for (int i = 0; i < nodes.getLength(); i++) {
+                    Node n = nodes.item(i);
+                    if (n == null) {
+                        continue;
+                    }
+                    String text = n.getTextContent();
+                    String trimmed = text != null ? text.trim() : "";
+                    if (!trimmed.isEmpty()) {
+                        return trimmed;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // fallback regex juste après
+        }
+        return "";
+    }
+
     private void createHistoFromVirementRecu(VirementRecu v, long idVrtEmis) {
+        Optional<VirementRecuHisto> existing = virementRecuHistoRepository
+                .findTopByIdVrtRecuVirementRecuOrderByDateHistorisationDesc(v.getIdVrtRecu());
+        if (existing.isPresent()) {
+            VirementRecuHisto row = existing.get();
+            row.setDateHistorisation(OffsetDateTime.now());
+            virementRecuHistoRepository.save(row);
+            return;
+        }
+
         VirementRecuHisto h = new VirementRecuHisto();
         h.setIdVrtRecuHisto(virementRecuHistoRepository.nextIdVrtRecuHisto());
         h.setIdVrtRecuVirementRecu(v.getIdVrtRecu());

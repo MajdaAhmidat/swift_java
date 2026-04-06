@@ -15,12 +15,6 @@ import java.util.List;
 
 /**
  * Implémentation de {@link DocumentProcessorService}.
- *
- * Flux simple, comme demandé :
- * - Dossier IN_SOP : consomme uniquement les fichiers .xml → traitement SOP + enregistrement en base → FILESAVE ou ERRORLOGS
- * - Dossier IN_SAA : consomme uniquement les fichiers .ack → traitement SAA (mise à jour statut_swift) → FILESAVE ou ERRORLOGS
- *
- * Aucun renommage .xml → .ack, chaque type reste dans son dossier.
  */
 @Service
 public class DocumentProcessorServiceImpl implements DocumentProcessorService {
@@ -48,6 +42,9 @@ public class DocumentProcessorServiceImpl implements DocumentProcessorService {
                     int ackCount = 0;
                     try {
                         for (File file : allFiles) {
+                            if (file == null || !file.exists() || !file.isFile()) {
+                                continue;
+                            }
                             String name = file.getName();
                             if (name == null) continue;
                             String lower = name.toLowerCase();

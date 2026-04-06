@@ -22,15 +22,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Endpoint pour l'ingestion de messages ISO 20022 (Pacs 008, Pacs 009) et des ACK SAA.
- * - POST /ingest       : un XML en corps (SOP)
- * - POST /ingest-ack   : un ACK SAA en corps
- * - POST /process-documents :
- *      - traite les dossiers input.mt.directory (MT éventuels)
- *      - traite les dossiers input.mx.directory (SOP .xml)
- *      - traite les dossiers input.ack.directory (SAA .ack)
- */
 @RestController
 @RequestMapping("/api/mx")
 public class Iso20022IngestController {

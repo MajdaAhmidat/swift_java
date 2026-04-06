@@ -5,9 +5,13 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
+import java.util.Optional;
+
 @Repository
 public interface VirementRecuHistoRepository extends JpaRepository<VirementRecuHisto, VirementRecuHisto.VirementRecuHistoPK> {
 
     @Query("SELECT COALESCE(MAX(h.idVrtRecuHisto), 0) + 1 FROM VirementRecuHisto h")
     Long nextIdVrtRecuHisto();
+
+    Optional<VirementRecuHisto> findTopByIdVrtRecuVirementRecuOrderByDateHistorisationDesc(Long idVrtRecuVirementRecu);
 }
