@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface VirementEmisRepository extends JpaRepository<VirementEmis, VirementEmis.VirementEmisPK> {
@@ -21,6 +22,9 @@ public interface VirementEmisRepository extends JpaRepository<VirementEmis, Vire
 
     /** Recherche les virements par référence uniquement (utilisé pour appliquer le statut SAA). */
     List<VirementEmis> findByReference(String reference);
+
+    /** Recherche d'un virement emission par identifiant technique uniquement. */
+    Optional<VirementEmis> findByIdVrtEmis(Long idVrtEmis);
 
     /** Recherche par référence en ignorant espaces début/fin (TRIM) pour rapprochement .ack / virement_emis. */
     @Query("SELECT v FROM VirementEmis v WHERE TRIM(v.reference) = TRIM(:ref)")

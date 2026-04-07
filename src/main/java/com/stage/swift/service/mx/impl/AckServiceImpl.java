@@ -44,28 +44,31 @@ public class AckServiceImpl implements AckService {
             if (refs == null || refs.isEmpty()) {
                 continue;
             }
+            boolean matchedThisPdu = false;
             hasPduWithReferences = true;
             refsTriedInPdu += refs.size();
             String status = AckHelper.extractStatus(fullPdu);
-            for (String ref : refs) {
+            List<String> uetrs = AckHelper.extractAllUetrOrdered(fullPdu);
+            uetrTriedInPdu += uetrs.size();
+            for (String uetr : uetrs) {
                 try {
-                    saveDataAck(new AckDto(ref, status));
+                    saveDataAckByUetr(uetr, status);
                     anyUpdated = true;
+                    matchedThisPdu = true;
                     break;
                 } catch (IllegalStateException e) {
-                    log.info("ACK (PDU) : reference={} sans virement, essai référence suivante", ref);
+                    log.info("ACK (PDU) : uetr={} sans virement, essai UETR suivant", uetr);
                 }
             }
-            if (!anyUpdated) {
-                List<String> uetrs = AckHelper.extractAllUetrOrdered(fullPdu);
-                uetrTriedInPdu += uetrs.size();
-                for (String uetr : uetrs) {
+            if (!matchedThisPdu) {
+                for (String ref : refs) {
                     try {
-                        saveDataAckByUetr(uetr, status);
+                        saveDataAck(new AckDto(ref, status));
                         anyUpdated = true;
+                        matchedThisPdu = true;
                         break;
                     } catch (IllegalStateException e) {
-                        log.info("ACK (PDU) : uetr={} sans virement, essai UETR suivant", uetr);
+                        log.info("ACK (PDU) : reference={} sans virement, essai référence suivante", ref);
                     }
                 }
             }
@@ -82,14 +85,6 @@ public class AckServiceImpl implements AckService {
             }
             String status = AckHelper.extractStatus(ackContent);
             log.info("ACK : {} référence(s) candidate(s) extraite(s), recherche virement en base", refs.size());
-            for (String ref : refs) {
-                try {
-                    saveDataAck(new AckDto(ref, status));
-                    return;
-                } catch (IllegalStateException e) {
-                    log.info("ACK : reference={} sans virement, essai référence suivante", ref);
-                }
-            }
             List<String> uetrs = AckHelper.extractAllUetrOrdered(ackContent);
             for (String uetr : uetrs) {
                 try {
@@ -97,6 +92,14 @@ public class AckServiceImpl implements AckService {
                     return;
                 } catch (IllegalStateException e) {
                     log.info("ACK : uetr={} sans virement, essai UETR suivant", uetr);
+                }
+            }
+            for (String ref : refs) {
+                try {
+                    saveDataAck(new AckDto(ref, status));
+                    return;
+                } catch (IllegalStateException e) {
+                    log.info("ACK : reference={} sans virement, essai référence suivante", ref);
                 }
             }
             log.warn("ACK sans correspondance: {} référence(s) et {} UETR testé(s), aucun VirementEmis trouvé", refs.size(), uetrs.size());

@@ -50,6 +50,10 @@ public final class FileUtils {
         Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
     }
 
+    public static Path resolveSaveTargetPath(String filePath) {
+        return buildTargetPath(filePath, true);
+    }
+
     public static void moveToRejet(String filePath) throws IOException {
         Path sourcePath = Paths.get(filePath);
         if (!Files.exists(sourcePath)) {

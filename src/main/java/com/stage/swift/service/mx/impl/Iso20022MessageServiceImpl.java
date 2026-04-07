@@ -4,6 +4,7 @@ import com.prowidesoftware.swift.model.mx.MxPacs00800108;
 import com.prowidesoftware.swift.model.mx.MxPacs00900108;
 import com.stage.swift.entity.Adresse;
 import com.stage.swift.entity.MessageEmis;
+import com.stage.swift.entity.Sop;
 import com.stage.swift.entity.VirementEmis;
 import com.stage.swift.entity.VirementEmisHisto;
 import com.stage.swift.entity.VirementRecu;
@@ -24,7 +25,6 @@ import com.stage.swift.repository.VirementEmisHistoRepository;
 import com.stage.swift.service.entity.MessageEmisService;
 import com.stage.swift.service.entity.VirementEmisService;
 import com.stage.swift.service.mx.Iso20022MessageService;
-import com.stage.swift.service.mx.MessageXmlArchiveService;
 import com.stage.swift.service.ref.ReferenceDataResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,8 +61,8 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     /** type_adresse : 1 = DBTR (débiteur), 2 = CDTR (créditeur) */
     private static final long ID_TYPE_ADRESSE_DBTR = 1L;
     private static final long ID_TYPE_ADRESSE_CDTR = 2L;
-    private static final long DEFAULT_ID_SOP = 1L;
-    private static final long DEFAULT_CODE_BIC = 1L;
+    private static final long DEFAULT_ID_SOP = 0L;
+    private static final long DEFAULT_CODE_BIC = 0L;
     private static final long CODE_MSG_PACS008 = 1L;
     private static final long CODE_MSG_PACS009 = 2L;
     private static final Pattern UETR_XML_PATTERN = Pattern.compile(
@@ -85,7 +85,6 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     private final PACS008ToVirementEmisMapper pacs008ToVirementEmisMapper;
     private final PACS009ToVirementEmisMapper pacs009ToVirementEmisMapper;
     private final ReferenceDataResolver referenceDataResolver;
-    private final MessageXmlArchiveService messageXmlArchiveService;
 
     public Iso20022MessageServiceImpl(VirementEmisRepository virementEmisRepository,
                                       MessageEmisRepository messageEmisRepository,
@@ -99,8 +98,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                                       TypeMessageRepository typeMessageRepository,
                                       PACS008ToVirementEmisMapper pacs008ToVirementEmisMapper,
                                       PACS009ToVirementEmisMapper pacs009ToVirementEmisMapper,
-                                      ReferenceDataResolver referenceDataResolver,
-                                      MessageXmlArchiveService messageXmlArchiveService) {
+                                      ReferenceDataResolver referenceDataResolver) {
         this.virementEmisRepository = virementEmisRepository;
         this.messageEmisRepository = messageEmisRepository;
         this.virementEmisHistoRepository = virementEmisHistoRepository;
@@ -114,12 +112,17 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         this.pacs008ToVirementEmisMapper = pacs008ToVirementEmisMapper;
         this.pacs009ToVirementEmisMapper = pacs009ToVirementEmisMapper;
         this.referenceDataResolver = referenceDataResolver;
-        this.messageXmlArchiveService = messageXmlArchiveService;
     }
 
     @Override
     @Transactional
     public VirementRecu parseAndSave(String xml) {
+        return parseAndSave(xml, null);
+    }
+
+    @Override
+    @Transactional
+    public VirementRecu parseAndSave(String xml, String sourceFilePath) {
         if (xml == null || xml.trim().isEmpty()) {
             throw new IllegalArgumentException("XML vide");
         }
@@ -129,7 +132,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
             List<String> singleDocs = splitIntoSingleXmlDocuments(xml);
             for (String doc : singleDocs) {
                 if (doc != null && !doc.trim().isEmpty()) {
-                    parseAndSave(doc);
+                    parseAndSave(doc, sourceFilePath);
                 }
             }
             return null;
@@ -140,7 +143,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         List<String> allDocs = SaaEnvelopeHelper.extractAllPacsDocuments(xml);
         if (!allDocs.isEmpty()) {
             for (String docXml : allDocs) {
-                parseAndSaveOne(docXml);
+                parseAndSaveOne(docXml, sourceFilePath);
             }
             return null;
         }
@@ -159,17 +162,17 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         }
         String xmlToParse = SaaEnvelopeHelper.xmlToParse(xml, messageType);
         if (messageType == MessageMX.CAMT054) {
-            parseAndSaveCamt054(xmlToParse, xml);
+            parseAndSaveCamt054(xmlToParse, xml, sourceFilePath);
             return null;
         }
-        parseAndSaveOne(xmlToParse);
+        parseAndSaveOne(xmlToParse, sourceFilePath);
         return null;
     }
 
     /**
      * Traite un message camt.054 (Bank to Customer Debit Credit Notification)..
      */
-    private void parseAndSaveCamt054(String xmlToParse, String fullXml) {
+    private void parseAndSaveCamt054(String xmlToParse, String fullXml, String sourceFilePath) {
         com.prowidesoftware.swift.model.mx.MxCamt05400108 camt = null;
         try {
             camt = com.prowidesoftware.swift.model.mx.MxCamt05400108.parse(xmlToParse);
@@ -187,7 +190,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         }
         long idSop = resolveSopIdFromBusinessSource(xmlToParse, "CAMT054");
         try {
-            parseAndSaveCamt054Entries(camt, idSop, xmlToParse);
+            parseAndSaveCamt054Entries(camt, idSop, xmlToParse, sourceFilePath);
         } catch (Exception e) {
             log.warn("CAMT054: erreur lors de la création des virements: {}", e.getMessage());
         }
@@ -222,7 +225,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         return out;
     }
 
-    private void parseAndSaveCamt054Entries(com.prowidesoftware.swift.model.mx.MxCamt05400108 camt, long idSop, String rawXml) {
+    private void parseAndSaveCamt054Entries(com.prowidesoftware.swift.model.mx.MxCamt05400108 camt, long idSop, String rawXml, String sourceFilePath) {
         com.prowidesoftware.swift.model.mx.dic.BankToCustomerDebitCreditNotificationV08 notif = camt.getBkToCstmrDbtCdtNtfctn();
         if (notif == null || notif.getNtfctn() == null || notif.getNtfctn().isEmpty()) {
             log.info("CAMT054: aucune notification, message accepté sans création de virement");
@@ -245,21 +248,16 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                                 .orElse(incoming);
 
                         virementEmisService.save(entityToPersist);
-                        messageXmlArchiveService.archiveForVirementEmis(
-                                entityToPersist.getIdVrtEmis(),
-                                "EMIS",
-                                "camt.054.001.08",
-                                rawXml
-                        );
                         syncAdresseForExistingEmis(existingOpt, incoming, entityToPersist);
                         // Historiser chaque création et chaque modification.
                         createHistoFromVirement(entityToPersist);
                         if (!existingOpt.isPresent()) {
-                            MessageEmis m = mapToMessageEmis(entityToPersist, tx.getRefs() != null ? tx.getRefs().getMsgId() : grpMsgId);
+                            MessageEmis m = mapToMessageEmis(entityToPersist, tx.getRefs() != null ? tx.getRefs().getMsgId() : grpMsgId, sourceFilePath);
                             m.setIdMsgEmis(messageEmisRepository.nextIdMsgEmis());
                             messageEmisService.save(m);
                             log.info("CAMT054: VirementEmis créé + historisé + MessageEmis, idVrtEmis={}", entityToPersist.getIdVrtEmis());
                         } else {
+                            updateLatestMessageEmisFileMeta(entityToPersist.getIdVrtEmis(), sourceFilePath);
                             log.info("CAMT054: VirementEmis actualisé + historisé: uetr={}, reference={}, idVrtEmis={}",
                                     entityToPersist.getUetr(), entityToPersist.getReference(), entityToPersist.getIdVrtEmis());
                         }
@@ -356,13 +354,13 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     /**
      * Parse un seul document PACS (008 ou 009) et enregistre un VirementEmis + MessageEmis.
      */
-    private void parseAndSaveOne(String xmlToParse) {
+    private void parseAndSaveOne(String xmlToParse, String sourceFilePath) {
         MessageMX messageType = MessageMX.fromXmlContent(xmlToParse);
         if (messageType == null) {
             throw new IllegalArgumentException("Document non reconnu (pacs.008, pacs.009 ou camt.054 attendu)");
         }
         if (messageType == MessageMX.CAMT054) {
-            parseAndSaveCamt054(xmlToParse, xmlToParse);
+            parseAndSaveCamt054(xmlToParse, xmlToParse, sourceFilePath);
             return;
         }
         try {
@@ -388,21 +386,16 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                         .map(existing -> mergeEmis(existing, incoming))
                         .orElse(incoming);
                 virementEmisService.save(entityToPersist);
-                messageXmlArchiveService.archiveForVirementEmis(
-                        entityToPersist.getIdVrtEmis(),
-                        "EMIS",
-                        "pacs.008.001.08",
-                        xmlToParse
-                );
                 syncAdresseForExistingEmis(existingOpt, incoming, entityToPersist);
                 // Historiser chaque création et chaque modification.
                 createHistoFromVirement(entityToPersist);
                 if (!existingOpt.isPresent()) {
-                    MessageEmis messageEmis = mapToMessageEmis(entityToPersist, msgId);
+                    MessageEmis messageEmis = mapToMessageEmis(entityToPersist, msgId, sourceFilePath);
                     messageEmis.setIdMsgEmis(messageEmisRepository.nextIdMsgEmis());
                     messageEmisService.save(messageEmis);
                     log.info("PACS 008: VirementEmis créé + historisé + MessageEmis, idVrtEmis={}", entityToPersist.getIdVrtEmis());
                 } else {
+                    updateLatestMessageEmisFileMeta(entityToPersist.getIdVrtEmis(), sourceFilePath);
                     log.info("PACS 008: VirementEmis actualisé + historisé: uetr={}, reference={}, idVrtEmis={}",
                             entityToPersist.getUetr(), entityToPersist.getReference(), entityToPersist.getIdVrtEmis());
                 }
@@ -429,21 +422,16 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                     .map(existing -> mergeEmis(existing, incoming))
                     .orElse(incoming);
             virementEmisService.save(entityToPersist);
-            messageXmlArchiveService.archiveForVirementEmis(
-                    entityToPersist.getIdVrtEmis(),
-                    "EMIS",
-                    "pacs.009.001.08",
-                    xmlToParse
-            );
             syncAdresseForExistingEmis(existingOpt, incoming, entityToPersist);
             // Historiser chaque création et chaque modification.
             createHistoFromVirement(entityToPersist);
             if (!existingOpt.isPresent()) {
-                MessageEmis messageEmis = mapToMessageEmis(entityToPersist, msgId);
+                MessageEmis messageEmis = mapToMessageEmis(entityToPersist, msgId, sourceFilePath);
                 messageEmis.setIdMsgEmis(messageEmisRepository.nextIdMsgEmis());
                 messageEmisService.save(messageEmis);
                 log.info("PACS 009: VirementEmis créé + historisé + MessageEmis, idVrtEmis={}", entityToPersist.getIdVrtEmis());
             } else {
+                updateLatestMessageEmisFileMeta(entityToPersist.getIdVrtEmis(), sourceFilePath);
                 log.info("PACS 009: VirementEmis actualisé + historisé: uetr={}, reference={}, idVrtEmis={}",
                         entityToPersist.getUetr(), entityToPersist.getReference(), entityToPersist.getIdVrtEmis());
             }
@@ -656,17 +644,42 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     }
 
     private void ensureReferenceDataExists() {
+        ensureDefaultAdresseExists();
+        ensureDefaultSopExists();
         StringBuilder missing = new StringBuilder();
         if (!statutRepository.findById(DEFAULT_ID_STATUT).isPresent()) missing.append(" statut(id=1)");
-        if (!adresseRepository.findById(DEFAULT_ID_ADRESSE).isPresent()) missing.append(" adresse(id=0)");
-        if (!sopRepository.findById(DEFAULT_ID_SOP).isPresent()) missing.append(" sop(id=1)");
-        if (!bicRepository.findById(DEFAULT_CODE_BIC).isPresent()) missing.append(" bic(code_bic=1)");
         if (!typeMessageRepository.findById(CODE_MSG_PACS008).isPresent()) missing.append(" type_message(code_msg=1)");
         if (!typeMessageRepository.findById(CODE_MSG_PACS009).isPresent()) missing.append(" type_message(code_msg=2)");
         if (missing.length() > 0) {
             throw new MissingReferenceDataException(
                 "Données de référence manquantes. Créer en base:" + missing + ".");
         }
+    }
+
+    private void ensureDefaultAdresseExists() {
+        if (adresseRepository.findById(DEFAULT_ID_ADRESSE).isPresent()) {
+            return;
+        }
+        Adresse adresse = new Adresse();
+        adresse.setIdAdresse(DEFAULT_ID_ADRESSE);
+        adresse.setIdTypeAdresse(ID_TYPE_ADRESSE_DBTR);
+        adresse.setLigne1("ADRESSE PAR DEFAUT");
+        adresse.setVille("CASABLANCA");
+        adresse.setCodePostal("00000");
+        adresse.setPays("MA");
+        adresseRepository.save(adresse);
+        log.warn("Référence auto-créée: adresse(id={})", DEFAULT_ID_ADRESSE);
+    }
+
+    private void ensureDefaultSopExists() {
+        if (sopRepository.findById(DEFAULT_ID_SOP).isPresent()) {
+            return;
+        }
+        Sop sop = new Sop();
+        sop.setId(DEFAULT_ID_SOP);
+        sop.setLibelleSop("SOP PAR DEFAUT");
+        sopRepository.save(sop);
+        log.warn("Référence auto-créée: sop(id={})", DEFAULT_ID_SOP);
     }
 
     private static String extractBicCodeFromPacs008(MxPacs00800108 mx) {
@@ -917,7 +930,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         virementEmisHistoRepository.save(h);
     }
 
-    private MessageEmis mapToMessageEmis(VirementEmis v, String msgId) {
+    private MessageEmis mapToMessageEmis(VirementEmis v, String msgId, String sourceFilePath) {
         MessageEmis m = new MessageEmis();
         m.setIdVrtEmisVirementEmis(v.getIdVrtEmis());
         m.setIdSopVirementEmis(v.getIdSop());
@@ -928,7 +941,20 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         m.setIdVrtEmis(v.getIdVrtEmis());
         m.setReference(msgId != null ? truncate(msgId, 35) : v.getReference());
         m.setSop(v.getIdSop());
+        m.setNom(sourceFilePath == null ? null : new java.io.File(sourceFilePath).getName());
+        m.setPath(sourceFilePath);
         m.setVirementEmis(v);
         return m;
+    }
+
+    private void updateLatestMessageEmisFileMeta(Long idVrtEmis, String sourceFilePath) {
+        if (idVrtEmis == null || sourceFilePath == null || sourceFilePath.trim().isEmpty()) {
+            return;
+        }
+        messageEmisRepository.findTopByIdVrtEmisOrderByIdMsgEmisDesc(idVrtEmis).ifPresent(m -> {
+            m.setNom(new java.io.File(sourceFilePath).getName());
+            m.setPath(sourceFilePath);
+            messageEmisRepository.save(m);
+        });
     }
 }

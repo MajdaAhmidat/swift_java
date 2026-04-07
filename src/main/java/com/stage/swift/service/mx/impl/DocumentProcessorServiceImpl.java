@@ -72,9 +72,10 @@ public class DocumentProcessorServiceImpl implements DocumentProcessorService {
     private void processXmlDocument(File file, MessageStandardType messageType) throws IOException {
         String content = FileUtils.fileToString(file);
         String filePath = file.getPath();
+        String targetSavePath = FileUtils.resolveSaveTargetPath(filePath).toString();
         try {
             if (MessageStandardType.MX.equals(messageType)) {
-                messageProcessorService.process(content, messageType);
+                messageProcessorService.process(content, messageType, targetSavePath);
             } else {
                 logger.warn("[DocumentProcessorService] Type {} non supporté pour .xml (PACS008/PACS009)", messageType.name());
             }

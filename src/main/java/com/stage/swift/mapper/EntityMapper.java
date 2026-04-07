@@ -293,6 +293,8 @@ public class EntityMapper {
         dto.setIdVrtEmis(e.getIdVrtEmis());
         dto.setReference(e.getReference());
         dto.setSop(e.getSop());
+        dto.setNom(e.getNom());
+        dto.setPath(e.getPath());
         return dto;
     }
 
@@ -309,6 +311,8 @@ public class EntityMapper {
         e.setIdVrtEmis(dto.getIdVrtEmis());
         e.setReference(dto.getReference());
         e.setSop(dto.getSop());
+        e.setNom(dto.getNom());
+        e.setPath(dto.getPath());
         return e;
     }
 
@@ -324,6 +328,8 @@ public class EntityMapper {
         dto.setCodeMsgTypeMessageVirementRecu(e.getCodeMsgTypeMessageVirementRecu());
         dto.setReference(e.getReference());
         dto.setSop(e.getSop());
+        dto.setNom(e.getNom());
+        dto.setPath(e.getPath());
         return dto;
     }
 
@@ -339,6 +345,8 @@ public class EntityMapper {
         e.setCodeMsgTypeMessageVirementRecu(dto.getCodeMsgTypeMessageVirementRecu());
         e.setReference(dto.getReference());
         e.setSop(dto.getSop());
+        e.setNom(dto.getNom());
+        e.setPath(dto.getPath());
         return e;
     }
 

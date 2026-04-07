@@ -41,6 +41,12 @@ public class MessageEmis {
     @Column(name = "sop", nullable = false)
     private Long sop;
 
+    @Column(name = "nom", length = 255)
+    private String nom;
+
+    @Column(name = "path", length = 1024)
+    private String path;
+
     /** MESSAGE_EMIS has_one VIREMENT_EMIS (owning side with FK) */
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumns({
@@ -73,6 +79,10 @@ public class MessageEmis {
     public void setReference(String reference) { this.reference = reference; }
     public Long getSop() { return sop; }
     public void setSop(Long sop) { this.sop = sop; }
+    public String getNom() { return nom; }
+    public void setNom(String nom) { this.nom = nom; }
+    public String getPath() { return path; }
+    public void setPath(String path) { this.path = path; }
     public VirementEmis getVirementEmis() { return virementEmis; }
     public void setVirementEmis(VirementEmis virementEmis) { this.virementEmis = virementEmis; }
 

@@ -16,4 +16,6 @@ public interface Iso20022MessageService {
      */
     VirementRecu parseAndSave(String xml);
 
+    VirementRecu parseAndSave(String xml, String sourceFilePath);
+
 }

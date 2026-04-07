@@ -25,8 +25,13 @@ public class MessageProcessorServiceImpl implements MessageProcessorService {
 
     @Override
     public VirementRecu process(String content, MessageStandardType messageType) {
+        return process(content, messageType, null);
+    }
+
+    @Override
+    public VirementRecu process(String content, MessageStandardType messageType, String sourceFilePath) {
         if (MessageStandardType.MX.equals(messageType)) {
-            return iso20022MessageService.parseAndSave(content);
+            return iso20022MessageService.parseAndSave(content, sourceFilePath);
         }
         logger.warn("[MessageProcessorService] Type {} non supporté (seul MX est persisté)", messageType);
         return null;

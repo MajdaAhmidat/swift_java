@@ -44,7 +44,8 @@ public class OutDocumentProcessorServiceImpl implements OutDocumentProcessorServ
             String path = file.getPath();
             try {
                 String content = FileUtils.fileToString(file);
-                ackRecuService.processAckFileRecu(content);
+                String targetSavePath = FileUtils.resolveSaveTargetPath(path).toString();
+                ackRecuService.processAckFileRecu(content, targetSavePath);
                 FileUtils.moveToSave(path);
                 count++;
                 log.info("[OutDocumentProcessor] Fichier .ack recu traité → VirementRecu + MessageRecu créés → SAVE_SAA : {}", file.getName());

@@ -38,6 +38,12 @@ public class MessageRecu {
     @Column(name = "sop", nullable = false)
     private Long sop;
 
+    @Column(name = "nom", length = 255)
+    private String nom;
+
+    @Column(name = "path", length = 1024)
+    private String path;
+
     /** Plusieurs MESSAGE_RECU peuvent pointer vers le même VIREMENT_RECU. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumns({
@@ -68,6 +74,10 @@ public class MessageRecu {
     public void setReference(String reference) { this.reference = reference; }
     public Long getSop() { return sop; }
     public void setSop(Long sop) { this.sop = sop; }
+    public String getNom() { return nom; }
+    public void setNom(String nom) { this.nom = nom; }
+    public String getPath() { return path; }
+    public void setPath(String path) { this.path = path; }
     public VirementRecu getVirementRecu() { return virementRecu; }
     public void setVirementRecu(VirementRecu virementRecu) { this.virementRecu = virementRecu; }
 

@@ -20,6 +20,8 @@ public class MessageEmisDTO implements Serializable {
     private Long idVrtEmis;
     private String reference;
     private Long sop;
+    private String nom;
+    private String path;
 
     public MessageEmisDTO() {}
 
@@ -43,4 +45,8 @@ public class MessageEmisDTO implements Serializable {
     public void setReference(String reference) { this.reference = reference; }
     public Long getSop() { return sop; }
     public void setSop(Long sop) { this.sop = sop; }
+    public String getNom() { return nom; }
+    public void setNom(String nom) { this.nom = nom; }
+    public String getPath() { return path; }
+    public void setPath(String path) { this.path = path; }
 }

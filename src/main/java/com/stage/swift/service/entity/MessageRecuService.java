@@ -14,4 +14,10 @@ public interface MessageRecuService {
     MessageRecu save(MessageRecu entity);
 
     void deleteById(MessageRecu.MessageRecuPK id);
+
+    List<MessageRecu> findByVirementRecuId(Long idVrtRecu);
+
+    Optional<String> generateXmlByVirementRecuId(Long idVrtRecu);
+
+    Optional<String> generateXmlByMessageRecuPk(MessageRecu.MessageRecuPK id);
 }

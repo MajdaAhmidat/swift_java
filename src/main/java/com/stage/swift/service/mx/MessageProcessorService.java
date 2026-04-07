@@ -9,4 +9,6 @@ import com.stage.swift.entity.VirementRecu;
 public interface MessageProcessorService {
 
     VirementRecu process(String content, MessageStandardType messageType);
+
+    VirementRecu process(String content, MessageStandardType messageType, String sourceFilePath);
 }

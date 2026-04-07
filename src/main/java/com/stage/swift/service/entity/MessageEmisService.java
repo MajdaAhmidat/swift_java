@@ -14,4 +14,10 @@ public interface MessageEmisService {
     MessageEmis save(MessageEmis entity);
 
     void deleteById(MessageEmis.MessageEmisPK id);
+
+    List<MessageEmis> findByVirementEmisId(Long idVrtEmis);
+
+    Optional<String> generateXmlByVirementEmisId(Long idVrtEmis);
+
+    Optional<String> generateXmlByMessageEmisPk(MessageEmis.MessageEmisPK id);
 }

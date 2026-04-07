@@ -5,6 +5,7 @@ import com.stage.swift.entity.MessageEmis;
 import com.stage.swift.mapper.EntityMapper;
 import com.stage.swift.service.entity.MessageEmisService;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -33,6 +34,30 @@ public class MessageEmisController {
         return ResponseEntity.ok(list);
     }
 
+    @GetMapping("/by-virement/{idVrtEmis}")
+    public ResponseEntity<List<MessageEmisDTO>> listByVirement(@PathVariable Long idVrtEmis) {
+        List<MessageEmisDTO> list = messageEmisService.findByVirementEmisId(idVrtEmis).stream()
+                .map(mapper::toDTO)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(list);
+    }
+
+    @GetMapping(value = "/xml", produces = MediaType.APPLICATION_XML_VALUE)
+    public ResponseEntity<String> getXmlByPk(
+            @RequestParam Long idMsgEmis,
+            @RequestParam Long idVrtEmisVirementEmis,
+            @RequestParam Long idSopVirementEmis,
+            @RequestParam Long idStatutStatutVirementEmis,
+            @RequestParam Long idAdresseAdresseVirementEmis,
+            @RequestParam Long codeBicBicVirementEmis,
+            @RequestParam Long codeMsgTypeMessageVirementEmis) {
+        MessageEmis.MessageEmisPK pk = buildMessageEmisPK(idMsgEmis, idVrtEmisVirementEmis, idSopVirementEmis,
+                idStatutStatutVirementEmis, idAdresseAdresseVirementEmis, codeBicBicVirementEmis, codeMsgTypeMessageVirementEmis);
+        return messageEmisService.generateXmlByMessageEmisPk(pk)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
     @GetMapping("/by-id")
     public ResponseEntity<MessageEmisDTO> findById(
             @RequestParam Long idMsgEmis,
@@ -46,6 +71,13 @@ public class MessageEmisController {
                 idStatutStatutVirementEmis, idAdresseAdresseVirementEmis, codeBicBicVirementEmis, codeMsgTypeMessageVirementEmis);
         return messageEmisService.findById(pk)
                 .map(mapper::toDTO)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    @GetMapping(value = "/virement/{idVrtEmis}/xml", produces = MediaType.APPLICATION_XML_VALUE)
+    public ResponseEntity<String> getXmlByVirementEmis(@PathVariable Long idVrtEmis) {
+        return messageEmisService.generateXmlByVirementEmisId(idVrtEmis)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }

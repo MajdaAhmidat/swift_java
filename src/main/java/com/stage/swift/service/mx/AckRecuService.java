@@ -7,4 +7,6 @@ package com.stage.swift.service.mx;
 public interface AckRecuService {
 
     void processAckFileRecu(String ackContent);
+
+    void processAckFileRecu(String ackContent, String sourceFilePath);
 }

@@ -19,7 +19,7 @@ import java.util.Optional;
 public class ReferenceDataResolverImpl implements ReferenceDataResolver {
 
     private static final Logger log = LoggerFactory.getLogger(ReferenceDataResolverImpl.class);
-    private static final long FALLBACK_SOP_ID = 1L;
+    private static final long FALLBACK_SOP_ID = 0L;
     private static final long FALLBACK_STATUT_ID = 1L;
 
     private final BicRepository bicRepository;
@@ -61,7 +61,7 @@ public class ReferenceDataResolverImpl implements ReferenceDataResolver {
     @Override
     public long resolveCodeBicFromBic(String bicCode) {
         if (bicCode == null || bicCode.trim().isEmpty()) {
-            return 1L;
+            throw new IllegalArgumentException("BIC introuvable dans le message (ordonnateur/bénéficiaire)");
         }
         String code = bicCode.trim();
         Optional<Bic> bic = bicRepository.findFirstByBicOrdonnateurOrBicBeneficiare(code, code);

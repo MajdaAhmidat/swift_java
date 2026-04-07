@@ -58,8 +58,6 @@ public class SecurityConfig extends WebSecurityConfigurerAdapter {
                 // Messages MX: lecture pour SUPERVISEUR, écriture admin only
                 .antMatchers(HttpMethod.GET, "/api/messages-recu/**", "/api/messages-emis/**")
                 .hasAnyRole("ADMIN", "SUPERVISEUR")
-                .antMatchers(HttpMethod.GET, "/api/messages-xml/**")
-                .hasAnyRole("ADMIN", "SUPERVISEUR")
                 .antMatchers(HttpMethod.POST, "/api/messages-recu/**", "/api/messages-emis/**")
                 .hasRole("ADMIN")
                 .antMatchers(HttpMethod.PUT, "/api/messages-recu/**", "/api/messages-emis/**")

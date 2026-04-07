@@ -25,7 +25,6 @@ com\stage\swift\controller\entity\MessageEmisController.class
 com\stage\swift\repository\VirementRecuHistoRepository.class
 com\stage\swift\service\entity\package-info.class
 com\stage\swift\service\mx\impl\AckServiceImpl.class
-com\stage\swift\controller\entity\MessageXmlArchiveController.class
 com\stage\swift\repository\RoleRepository.class
 com\stage\swift\dto\entity\VirementEmisHistoDTO.class
 com\stage\swift\service\mx\DocumentProcessorService.class
@@ -34,7 +33,6 @@ com\stage\swift\repository\AdresseRepository.class
 com\stage\swift\service\entity\VirementRecuHistoService.class
 com\stage\swift\controller\entity\VirementRecuController.class
 com\stage\swift\dto\entity\BicDTO.class
-com\stage\swift\service\mx\impl\MessageXmlArchiveServiceImpl.class
 com\stage\swift\repository\VirementEmisRepository.class
 com\stage\swift\dto\entity\SopDTO.class
 com\stage\swift\service\mx\package-info.class
@@ -47,7 +45,6 @@ com\stage\swift\controller\entity\BicController.class
 com\stage\swift\service\entity\AdresseService.class
 com\stage\swift\exception\RequiredFieldException.class
 com\stage\swift\service\entity\StatutService.class
-com\stage\swift\repository\MessageXmlArchiveRepository.class
 com\stage\swift\service\mx\impl\DocumentProcessorServiceImpl.class
 com\stage\swift\controller\entity\package-info.class
 com\stage\swift\service\entity\impl\VirementEmisServiceImpl.class
@@ -63,7 +60,6 @@ com\stage\swift\entity\Adresse.class
 com\stage\swift\service\entity\RoleService.class
 com\stage\swift\helpers\MxMapperHelper.class
 com\stage\swift\service\mx\impl\MxAckScheduler.class
-com\stage\swift\entity\MessageXmlArchive.class
 com\stage\swift\service\entity\MessageEmisService.class
 com\stage\swift\controller\entity\SopController.class
 com\stage\swift\entity\VirementRecu.class
@@ -119,7 +115,6 @@ com\stage\swift\service\mx\impl\MessageProcessorServiceImpl.class
 com\stage\swift\controller\entity\VirementRecuHistoController.class
 com\stage\swift\dto\entity\AdresseDTO.class
 com\stage\swift\repository\StatutRepository.class
-com\stage\swift\service\mx\MessageXmlArchiveService.class
 com\stage\swift\entity\MessageEmis$MessageEmisPK.class
 com\stage\swift\service\mx\AckRecuService.class
 com\stage\swift\entity\MessageRecu$MessageRecuPK.class

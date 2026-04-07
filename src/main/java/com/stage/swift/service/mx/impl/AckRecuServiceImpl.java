@@ -4,6 +4,7 @@ import com.prowidesoftware.swift.model.mx.MxPacs00800108;
 import com.prowidesoftware.swift.model.mx.MxPacs00900108;
 import com.stage.swift.entity.Adresse;
 import com.stage.swift.entity.MessageRecu;
+import com.stage.swift.entity.Sop;
 import com.stage.swift.entity.VirementRecu;
 import com.stage.swift.entity.VirementRecuHisto;
 import com.stage.swift.enums.MessageMX;
@@ -18,7 +19,6 @@ import com.stage.swift.repository.VirementRecuRepository;
 import com.stage.swift.service.entity.MessageRecuService;
 import com.stage.swift.service.entity.VirementRecuService;
 import com.stage.swift.service.mx.AckRecuService;
-import com.stage.swift.service.mx.MessageXmlArchiveService;
 import com.stage.swift.service.ref.ReferenceDataResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,7 +58,7 @@ public class AckRecuServiceImpl implements AckRecuService {
     /** type_adresse : 1 = DBTR (débiteur), 2 = CDTR (créditeur) */
     private static final long ID_TYPE_ADRESSE_DBTR = 1L;
     private static final long ID_TYPE_ADRESSE_CDTR = 2L;
-    private static final long DEFAULT_ID_SOP = 1L;
+    private static final long DEFAULT_ID_SOP = 0L;
     private static final Pattern SOP_XML_PATTERN = Pattern.compile(
             "<(?:[A-Za-z0-9_\\-]+:)?(?:SOP|SystemOperant|SystemeOperant|BizSvc|BusinessService)(?:\\s+[^>]*)?>\\s*([^<]+?)\\s*</(?:[A-Za-z0-9_\\-]+:)?(?:SOP|SystemOperant|SystemeOperant|BizSvc|BusinessService)\\s*>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
@@ -73,7 +73,6 @@ public class AckRecuServiceImpl implements AckRecuService {
     private final ReferenceDataResolver referenceDataResolver;
     private final AdresseRepository adresseRepository;
     private final SopRepository sopRepository;
-    private final MessageXmlArchiveService messageXmlArchiveService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -87,8 +86,7 @@ public class AckRecuServiceImpl implements AckRecuService {
                               PACS009ToVirementRecuMapper pacs009ToVirementRecuMapper,
                               ReferenceDataResolver referenceDataResolver,
                               AdresseRepository adresseRepository,
-                              SopRepository sopRepository,
-                              MessageXmlArchiveService messageXmlArchiveService) {
+                              SopRepository sopRepository) {
         this.virementRecuRepository = virementRecuRepository;
         this.virementRecuHistoRepository = virementRecuHistoRepository;
         this.messageRecuRepository = messageRecuRepository;
@@ -99,23 +97,27 @@ public class AckRecuServiceImpl implements AckRecuService {
         this.referenceDataResolver = referenceDataResolver;
         this.adresseRepository = adresseRepository;
         this.sopRepository = sopRepository;
-        this.messageXmlArchiveService = messageXmlArchiveService;
     }
 
     @Override
     @Transactional
     public void processAckFileRecu(String ackContent) {
+        processAckFileRecu(ackContent, null);
+    }
+
+    @Override
+    @Transactional
+    public void processAckFileRecu(String ackContent, String sourceFilePath) {
         if (ackContent == null || ackContent.trim().isEmpty()) {
             throw new IllegalArgumentException("Contenu .ack recu vide");
         }
-        if (!adresseRepository.findById(DEFAULT_ID_ADRESSE).isPresent()) {
-            throw new IllegalArgumentException("Donnée de référence manquante: adresse(id=0) introuvable");
-        }
+        ensureDefaultAdresseExists();
+        ensureDefaultSopExists();
         if (hasMultipleXmlDeclarations(ackContent)) {
             List<String> singleDocs = splitIntoSingleXmlDocuments(ackContent);
             for (String doc : singleDocs) {
                 if (doc != null && !doc.trim().isEmpty()) {
-                    processAckFileRecu(doc);
+                    processAckFileRecu(doc, sourceFilePath);
                 }
             }
             return;
@@ -124,7 +126,7 @@ public class AckRecuServiceImpl implements AckRecuService {
         List<String> allDocs = SaaEnvelopeHelper.extractAllPacsDocuments(ackContent);
         if (!allDocs.isEmpty()) {
             for (String docXml : allDocs) {
-                parseAndSaveRecuOne(docXml);
+                parseAndSaveRecuOne(docXml, sourceFilePath);
             }
             return;
         }
@@ -135,10 +137,10 @@ public class AckRecuServiceImpl implements AckRecuService {
         }
         String xmlToParse = SaaEnvelopeHelper.xmlToParse(ackContent, messageType);
         if (messageType == MessageMX.CAMT054) {
-            parseAndSaveCamt054Recu(xmlToParse, ackContent);
+            parseAndSaveCamt054Recu(xmlToParse, ackContent, sourceFilePath);
             return;
         }
-        parseAndSaveRecuOne(xmlToParse);
+        parseAndSaveRecuOne(xmlToParse, sourceFilePath);
     }
 
     private static boolean hasMultipleXmlDeclarations(String xml) {
@@ -368,7 +370,7 @@ public class AckRecuServiceImpl implements AckRecuService {
         return null;
     }
 
-    private void parseAndSaveCamt054Recu(String xmlToParse, String fullXml) {
+    private void parseAndSaveCamt054Recu(String xmlToParse, String fullXml, String sourceFilePath) {
         com.prowidesoftware.swift.model.mx.MxCamt05400108 camt = null;
         try {
             camt = com.prowidesoftware.swift.model.mx.MxCamt05400108.parse(xmlToParse);
@@ -428,23 +430,20 @@ public class AckRecuServiceImpl implements AckRecuService {
                                 .orElse(v);
 
                         virementRecuService.save(entityToPersist);
-                        messageXmlArchiveService.archiveForVirementRecu(
-                                entityToPersist.getIdVrtRecu(),
-                                "RECU",
-                                "camt.054.001.08",
-                                xmlToParse
-                        );
                         syncAdresseForExistingRecu(existingOpt, v, entityToPersist);
                         entityManager.flush();
                         // Historiser chaque création et chaque modification.
                         createHistoFromVirementRecu(entityToPersist, ID_VIREMENT_EMIS_NON_RAPPROCHE);
                         if (!existingOpt.isPresent() && !messageRecuRepository.existsByIdVrtRecuVirementRecu(entityToPersist.getIdVrtRecu())) {
-                            MessageRecu m = mapToMessageRecu(entityToPersist, tx.getRefs() != null ? tx.getRefs().getMsgId() : grpMsgId);
+                            MessageRecu m = mapToMessageRecu(entityToPersist, tx.getRefs() != null ? tx.getRefs().getMsgId() : grpMsgId, sourceFilePath);
                             m.setIdMsgRecu(messageRecuRepository.nextIdMsgRecu());
                             messageRecuService.save(m);
                             entityManager.flush();
                         } else if (!existingOpt.isPresent()) {
+                            updateLatestMessageRecuFileMeta(entityToPersist.getIdVrtRecu(), sourceFilePath);
                             log.warn("OUT_SAA CAMT054: MessageRecu déjà existant pour idVrtRecu={}, insertion ignorée", entityToPersist.getIdVrtRecu());
+                        } else {
+                            updateLatestMessageRecuFileMeta(entityToPersist.getIdVrtRecu(), sourceFilePath);
                         }
                         log.info("OUT_SAA CAMT054: VirementRecu {}, idVrtRecu={}",
                                 existingOpt.isPresent() ? "actualisé + historisé" : "créé + historisé (MessageRecu si absent)",
@@ -527,7 +526,7 @@ public class AckRecuServiceImpl implements AckRecuService {
         return v;
     }
 
-    private void parseAndSaveRecuOne(String xmlToParse) {
+    private void parseAndSaveRecuOne(String xmlToParse, String sourceFilePath) {
         MessageMX messageType = MessageMX.fromXmlContent(xmlToParse);
         if (messageType == null || messageType == MessageMX.CAMT054) {
             throw new IllegalArgumentException("Document recu non reconnu (pacs.008 ou pacs.009 attendu pour fragment)");
@@ -575,24 +574,21 @@ public class AckRecuServiceImpl implements AckRecuService {
                         .orElse(v);
 
                 virementRecuService.save(entityToPersist);
-                messageXmlArchiveService.archiveForVirementRecu(
-                        entityToPersist.getIdVrtRecu(),
-                        "RECU",
-                        "pacs.008.001.08",
-                        xmlToParse
-                );
                 syncAdresseForExistingRecu(existingOpt, v, entityToPersist);
                 entityManager.flush();
                 // Historiser chaque création et chaque modification.
                 createHistoFromVirementRecu(entityToPersist, ID_VIREMENT_EMIS_NON_RAPPROCHE);
                 // Ne créer MessageRecu et histo que pour un nouveau VirementRecu (évite doublons et "More than one row").
                 if (!existingOpt.isPresent() && !messageRecuRepository.existsByIdVrtRecuVirementRecu(entityToPersist.getIdVrtRecu())) {
-                    MessageRecu m = mapToMessageRecu(entityToPersist, msgId);
+                    MessageRecu m = mapToMessageRecu(entityToPersist, msgId, sourceFilePath);
                     m.setIdMsgRecu(messageRecuRepository.nextIdMsgRecu());
                     messageRecuService.save(m);
                     entityManager.flush();
                 } else if (!existingOpt.isPresent()) {
+                    updateLatestMessageRecuFileMeta(entityToPersist.getIdVrtRecu(), sourceFilePath);
                     log.warn("OUT_SAA PACS008: MessageRecu déjà existant pour idVrtRecu={}, insertion ignorée", entityToPersist.getIdVrtRecu());
+                } else {
+                    updateLatestMessageRecuFileMeta(entityToPersist.getIdVrtRecu(), sourceFilePath);
                 }
                 log.info("OUT_SAA PACS008: VirementRecu {}, idVrtRecu={}", existingOpt.isPresent() ? "actualisé + historisé" : "créé + historisé (MessageRecu si absent)", entityToPersist.getIdVrtRecu());
                 return;
@@ -638,23 +634,20 @@ public class AckRecuServiceImpl implements AckRecuService {
                     .orElse(v);
 
             virementRecuService.save(entityToPersist);
-            messageXmlArchiveService.archiveForVirementRecu(
-                    entityToPersist.getIdVrtRecu(),
-                    "RECU",
-                    "pacs.009.001.08",
-                    xmlToParse
-            );
             syncAdresseForExistingRecu(existingOpt, v, entityToPersist);
             entityManager.flush();
             // Historiser chaque création et chaque modification.
             createHistoFromVirementRecu(entityToPersist, ID_VIREMENT_EMIS_NON_RAPPROCHE);
             if (!existingOpt.isPresent() && !messageRecuRepository.existsByIdVrtRecuVirementRecu(entityToPersist.getIdVrtRecu())) {
-                MessageRecu m = mapToMessageRecu(entityToPersist, msgId);
+                MessageRecu m = mapToMessageRecu(entityToPersist, msgId, sourceFilePath);
                 m.setIdMsgRecu(messageRecuRepository.nextIdMsgRecu());
                 messageRecuService.save(m);
                 entityManager.flush();
             } else if (!existingOpt.isPresent()) {
+                updateLatestMessageRecuFileMeta(entityToPersist.getIdVrtRecu(), sourceFilePath);
                 log.warn("OUT_SAA PACS009: MessageRecu déjà existant pour idVrtRecu={}, insertion ignorée", entityToPersist.getIdVrtRecu());
+            } else {
+                updateLatestMessageRecuFileMeta(entityToPersist.getIdVrtRecu(), sourceFilePath);
             }
             log.info("OUT_SAA PACS009: VirementRecu {}, idVrtRecu={}", existingOpt.isPresent() ? "actualisé + historisé" : "créé + historisé (MessageRecu si absent)", entityToPersist.getIdVrtRecu());
         } catch (Exception e) {
@@ -694,6 +687,32 @@ public class AckRecuServiceImpl implements AckRecuService {
             log.warn("{}: UETR manquant -> message RECU stocké sans idempotence UETR (pas de sync id_adresse par UETR)", flow);
         }
         incoming.setUetr(uetr);
+    }
+
+    private void ensureDefaultAdresseExists() {
+        if (adresseRepository.findById(DEFAULT_ID_ADRESSE).isPresent()) {
+            return;
+        }
+        Adresse adresse = new Adresse();
+        adresse.setIdAdresse(DEFAULT_ID_ADRESSE);
+        adresse.setIdTypeAdresse(ID_TYPE_ADRESSE_DBTR);
+        adresse.setLigne1("ADRESSE PAR DEFAUT");
+        adresse.setVille("CASABLANCA");
+        adresse.setCodePostal("00000");
+        adresse.setPays("MA");
+        adresseRepository.save(adresse);
+        log.warn("Référence auto-créée: adresse(id={})", DEFAULT_ID_ADRESSE);
+    }
+
+    private void ensureDefaultSopExists() {
+        if (sopRepository.findById(DEFAULT_ID_SOP).isPresent()) {
+            return;
+        }
+        Sop sop = new Sop();
+        sop.setId(DEFAULT_ID_SOP);
+        sop.setLibelleSop("SOP PAR DEFAUT");
+        sopRepository.save(sop);
+        log.warn("Référence auto-créée: sop(id={})", DEFAULT_ID_SOP);
     }
 
     private long resolveSopIdFromBusinessSource(String xml, String flow) {
@@ -798,7 +817,7 @@ public class AckRecuServiceImpl implements AckRecuService {
         virementRecuHistoRepository.save(h);
     }
 
-    private MessageRecu mapToMessageRecu(VirementRecu v, String msgId) {
+    private MessageRecu mapToMessageRecu(VirementRecu v, String msgId, String sourceFilePath) {
         MessageRecu m = new MessageRecu();
         m.setIdVrtRecuVirementRecu(v.getIdVrtRecu());
         m.setIdStatutStatutVirementRecu(v.getIdStatutStatut());
@@ -808,7 +827,20 @@ public class AckRecuServiceImpl implements AckRecuService {
         m.setCodeMsgTypeMessageVirementRecu(v.getCodeMsgTypeMessage());
         m.setReference(msgId != null ? truncate(msgId, 35) : v.getReference());
         m.setSop(v.getIdSop());
+        m.setNom(sourceFilePath == null ? null : new java.io.File(sourceFilePath).getName());
+        m.setPath(sourceFilePath);
         m.setVirementRecu(v);
         return m;
+    }
+
+    private void updateLatestMessageRecuFileMeta(Long idVrtRecu, String sourceFilePath) {
+        if (idVrtRecu == null || sourceFilePath == null || sourceFilePath.trim().isEmpty()) {
+            return;
+        }
+        messageRecuRepository.findTopByIdVrtRecuVirementRecuOrderByIdMsgRecuDesc(idVrtRecu).ifPresent(m -> {
+            m.setNom(new java.io.File(sourceFilePath).getName());
+            m.setPath(sourceFilePath);
+            messageRecuRepository.save(m);
+        });
     }
 }
