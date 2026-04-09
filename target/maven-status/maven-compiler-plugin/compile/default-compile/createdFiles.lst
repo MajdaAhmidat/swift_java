@@ -28,6 +28,7 @@ com\stage\swift\service\mx\impl\AckServiceImpl.class
 com\stage\swift\repository\RoleRepository.class
 com\stage\swift\dto\entity\VirementEmisHistoDTO.class
 com\stage\swift\service\mx\DocumentProcessorService.class
+com\stage\swift\web\dto\LoginResponse.class
 com\stage\swift\entity\Statut.class
 com\stage\swift\repository\AdresseRepository.class
 com\stage\swift\service\entity\VirementRecuHistoService.class
@@ -64,6 +65,7 @@ com\stage\swift\service\entity\MessageEmisService.class
 com\stage\swift\controller\entity\SopController.class
 com\stage\swift\entity\VirementRecu.class
 com\stage\swift\controller\entity\PermissionController.class
+com\stage\swift\service\UtilisateurService.class
 com\stage\swift\controller\entity\StatutController.class
 com\stage\swift\repository\RolePermissionRepository.class
 com\stage\swift\entity\VirementEmis$VirementEmisPK.class
@@ -102,7 +104,9 @@ com\stage\swift\service\mx\AckService.class
 com\stage\swift\service\entity\impl\StatutServiceImpl.class
 com\stage\swift\controller\entity\TypeMessageController.class
 com\stage\swift\enums\package-info.class
+com\stage\swift\security\CustomUserDetailsService.class
 com\stage\swift\service\mx\impl\Iso20022MessageServiceImpl.class
+com\stage\swift\web\dto\ChangePasswordRequest.class
 com\stage\swift\repository\MessageEmisRepository.class
 com\stage\swift\service\package-info.class
 com\stage\swift\entity\VirementRecu$VirementRecuPK.class

@@ -60,12 +60,23 @@ public class ReferenceDataResolverImpl implements ReferenceDataResolver {
 
     @Override
     public long resolveCodeBicFromBic(String bicCode) {
+        return resolveCodeBicFromBic(bicCode, FALLBACK_SOP_ID);
+    }
+
+    @Override
+    public long resolveCodeBicFromBic(String bicCode, Long idSop) {
         if (bicCode == null || bicCode.trim().isEmpty()) {
             throw new IllegalArgumentException("BIC introuvable dans le message (ordonnateur/bénéficiaire)");
         }
         String code = bicCode.trim();
+        long targetSop = idSop != null ? idSop : FALLBACK_SOP_ID;
         Optional<Bic> bic = bicRepository.findFirstByBicOrdonnateurOrBicBeneficiare(code, code);
         if (bic.isPresent()) {
+            Bic existing = bic.get();
+            if (existing.getIdSop() == null || !existing.getIdSop().equals(targetSop)) {
+                existing.setIdSop(targetSop);
+                bicRepository.save(existing);
+            }
             return bic.get().getCodeBic();
         }
         // Si le BIC n'existe pas encore, on le crée en base et on retourne son code_bic.
@@ -79,10 +90,9 @@ public class ReferenceDataResolverImpl implements ReferenceDataResolver {
         // Code banque et libellé banque peuvent être affinés plus tard
         newBic.setCodeBq("0000");
         newBic.setLibelleBq(code);
-        // Si aucun SOP spécifique n'est connu pour ce BIC, on met le fallback
-        newBic.setIdSop(FALLBACK_SOP_ID);
+        newBic.setIdSop(targetSop);
         bicRepository.save(newBic);
-        log.info("BIC créé en base pour code={}, code_bic={}", code, nextCode);
+        log.info("BIC créé en base pour code={}, code_bic={}, id_sop={}", code, nextCode, targetSop);
         return nextCode;
     }
 }

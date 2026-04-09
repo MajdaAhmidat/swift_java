@@ -89,7 +89,7 @@ public class OutDocumentProcessorServiceImpl implements OutDocumentProcessorServ
             String path = file.getPath();
             try {
                 String content = FileUtils.fileToString(file);
-                sopRecuService.processSopRecu(content);
+                sopRecuService.processSopRecu(content, path);
                 FileUtils.moveToSave(path);
                 count++;
                 log.info("[OutDocumentProcessor] Fichier .xml SOP recu traité → statut VirementRecu mis à jour → SAVE_SOP : {}", file.getName());

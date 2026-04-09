@@ -8,6 +8,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -49,8 +50,21 @@ public class OutScheduler {
         if (outSopDirs == null || outSopDirs.isEmpty()) {
             log.warn("[OutScheduler] Aucun dossier OUT_SOP configuré (output.sop.directory)");
         } else {
+            List<String> configured = new ArrayList<>();
             for (String dirName : outSopDirs) {
                 String path = new File(dirName).isAbsolute() ? dirName : new File(baseDir, dirName).getAbsolutePath();
+                File f = new File(path);
+                if (f.exists() && f.isDirectory()) {
+                    configured.add(path);
+                }
+            }
+            outSopDirs = configured;
+        }
+        if (outSopDirs != null) {
+            for (String path : outSopDirs) {
+                if (path == null || path.trim().isEmpty()) {
+                    continue;
+                }
                 log.info("[OutScheduler] Traitement OUT_SOP .xml dans: {}", path);
                 outDocumentProcessorService.processOutSop(path);
             }
@@ -66,12 +80,12 @@ public class OutScheduler {
             return new File(base.trim()).getAbsolutePath();
         }
         String userDir = new File(System.getProperty("user.dir")).getAbsolutePath();
-        if (new File(userDir, "IN_SOP").exists() || new File(userDir, "OUT_SAA").exists()) {
+        if (new File(userDir, "SAA").exists()) {
             return userDir;
         }
         File swiftFin = new File(userDir, "swift_fin");
-        if (new File(swiftFin, "IN_SOP").exists() || new File(swiftFin, "OUT_SAA").exists()) {
-            log.info("[OutScheduler] OUT trouvé sous user.dir/swift_fin (lancement depuis dossier père)");
+        if (new File(swiftFin, "SAA").exists()) {
+            log.info("[OutScheduler] Dossiers trouvés sous user.dir/swift_fin");
             return swiftFin.getAbsolutePath();
         }
         return userDir;

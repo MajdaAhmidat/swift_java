@@ -20,4 +20,9 @@ public interface ReferenceDataResolver {
      * Si un BIC en base a ce code, on retourne son code_bic ; sinon fallback.
      */
     long resolveCodeBicFromBic(String bicCode);
+
+    /**
+     * Résout/crée le code_bic en forçant l'association au SOP fourni.
+     */
+    long resolveCodeBicFromBic(String bicCode, Long idSop);
 }

@@ -61,7 +61,6 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     /** type_adresse : 1 = DBTR (débiteur), 2 = CDTR (créditeur) */
     private static final long ID_TYPE_ADRESSE_DBTR = 1L;
     private static final long ID_TYPE_ADRESSE_CDTR = 2L;
-    private static final long DEFAULT_ID_SOP = 0L;
     private static final long DEFAULT_CODE_BIC = 0L;
     private static final long CODE_MSG_PACS008 = 1L;
     private static final long CODE_MSG_PACS009 = 2L;
@@ -71,6 +70,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
     private static final Pattern SOP_XML_PATTERN = Pattern.compile(
             "<(?:[A-Za-z0-9_\\-]+:)?(?:SOP|SystemOperant|SystemeOperant|BizSvc|BusinessService)(?:\\s+[^>]*)?>\\s*([^<]+?)\\s*</(?:[A-Za-z0-9_\\-]+:)?(?:SOP|SystemOperant|SystemeOperant|BizSvc|BusinessService)\\s*>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern SOP_FOLDER_PATTERN = Pattern.compile("(?i)(?:^|[\\\\/])SOP_(\\d+)(?:[_-]([^\\\\/]+))?(?:[\\\\/]|$)");
 
     private final VirementEmisRepository virementEmisRepository;
     private final MessageEmisRepository messageEmisRepository;
@@ -188,7 +188,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
             log.info("CAMT054: message reçu et accepté (parsing Prowide indisponible ou format non reconnu, aucun virement créé)");
             return;
         }
-        long idSop = resolveSopIdFromBusinessSource(xmlToParse, "CAMT054");
+        long idSop = resolveSopIdFromBusinessSource(xmlToParse, "CAMT054", sourceFilePath);
         try {
             parseAndSaveCamt054Entries(camt, idSop, xmlToParse, sourceFilePath);
         } catch (Exception e) {
@@ -280,7 +280,7 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                 bicCode = tx.getRltdAgts().getInstdAgt().getFinInstnId().getBICFI();
         }
         long idStatutStatut = resolver != null ? resolver.resolveStatutIdByCode("INTEGRE") : DEFAULT_ID_STATUT;
-        long codeBic = resolver != null ? resolver.resolveCodeBicFromBic(bicCode) : DEFAULT_CODE_BIC;
+        long codeBic = resolver != null ? resolver.resolveCodeBicFromBic(bicCode, idSop) : DEFAULT_CODE_BIC;
 
         com.prowidesoftware.swift.model.mx.dic.PostalAddress24 pstlAdr = null;
         // 1) Adresse de l'agent instigateur (FinInstnId/PstlAdr) si présente
@@ -370,9 +370,9 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                         ? mx.getFIToFICstmrCdtTrf().getGrpHdr().getMsgId()
                         : null;
                 String bicCode = extractBicCodeFromPacs008(mx);
-                long idSop = resolveSopIdFromBusinessSource(xmlToParse, "PACS008");
+                long idSop = resolveSopIdFromBusinessSource(xmlToParse, "PACS008", sourceFilePath);
                 long idStatutStatut = referenceDataResolver.resolveStatutIdByCode("INTEGRE");
-                long codeBic = referenceDataResolver.resolveCodeBicFromBic(bicCode);
+                long codeBic = referenceDataResolver.resolveCodeBicFromBic(bicCode, idSop);
                 long idAdresse = safeResolveAdresseIdFromPacs008(mx, "PACS008");
                 Long nextIdEmis = virementEmisRepository.nextIdVrtEmis();
                 VirementEmis incoming = pacs008ToVirementEmisMapper.toVirementEmis(mx, nextIdEmis,
@@ -406,9 +406,9 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
                     ? mx.getFICdtTrf().getGrpHdr().getMsgId()
                     : null;
             String bicCode = extractBicCodeFromPacs009(mx);
-            long idSop = resolveSopIdFromBusinessSource(xmlToParse, "PACS009");
+            long idSop = resolveSopIdFromBusinessSource(xmlToParse, "PACS009", sourceFilePath);
             long idStatutStatut = referenceDataResolver.resolveStatutIdByCode("INTEGRE");
-            long codeBic = referenceDataResolver.resolveCodeBicFromBic(bicCode);
+            long codeBic = referenceDataResolver.resolveCodeBicFromBic(bicCode, idSop);
             long idAdresse = safeResolveAdresseIdFromPacs009(mx, "PACS009");
             Long nextIdEmis = virementEmisRepository.nextIdVrtEmis();
             VirementEmis incoming = pacs009ToVirementEmisMapper.toVirementEmis(mx, nextIdEmis,
@@ -529,19 +529,102 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         return "";
     }
 
-    private long resolveSopIdFromBusinessSource(String xml, String flow) {
+    private long resolveSopIdFromBusinessSource(String xml, String flow, String sourceFilePath) {
+        Optional<Long> sopFromPath = extractSopIdFromPath(sourceFilePath);
+        if (sopFromPath.isPresent()) {
+            Long sopId = sopFromPath.get();
+            return ensureSopExistsFromPath(sopId, sourceFilePath, flow);
+        }
+        Optional<String> sopFolderLabel = extractSopFolderLabelFromPath(sourceFilePath);
+        if (sopFolderLabel.isPresent()) {
+            String folderLabel = sopFolderLabel.get().trim();
+            return sopRepository.findByLibelleSopNormalized(folderLabel)
+                    .map(Sop::getId)
+                    .orElseGet(() -> {
+                        Long newId = sopRepository.nextIdSop();
+                        Sop sop = new Sop();
+                        sop.setId(newId);
+                        sop.setLibelleSop(folderLabel);
+                        sopRepository.save(sop);
+                        log.warn("{}: SOP auto-créé depuis nom de dossier: id={}, libelle='{}'", flow, newId, sop.getLibelleSop());
+                        return newId;
+                    });
+        }
         String sopLibelle = extractFirstSopBusinessValue(xml);
         if (sopLibelle.isEmpty()) {
-            log.warn("{}: SOP métier introuvable dans le message, fallback id_sop={}", flow, DEFAULT_ID_SOP);
-            return DEFAULT_ID_SOP;
+            throw new IllegalArgumentException(flow + ": SOP introuvable dans le message.");
         }
         return sopRepository.findByLibelleSopNormalized(sopLibelle)
-                .map(s -> s.getId())
+                .map(Sop::getId)
                 .orElseGet(() -> {
-                    log.warn("{}: SOP métier '{}' absent de la table sop, fallback id_sop={}",
-                            flow, sopLibelle, DEFAULT_ID_SOP);
-                    return DEFAULT_ID_SOP;
+                    Long newId = sopRepository.nextIdSop();
+                    Sop sop = new Sop();
+                    sop.setId(newId);
+                    sop.setLibelleSop(sopLibelle.trim());
+                    sopRepository.save(sop);
+                    log.warn("{}: SOP auto-créé depuis message: id={}, libelle='{}'", flow, newId, sop.getLibelleSop());
+                    return newId;
                 });
+    }
+
+    private Optional<Long> extractSopIdFromPath(String sourceFilePath) {
+        if (sourceFilePath == null || sourceFilePath.trim().isEmpty()) {
+            return Optional.empty();
+        }
+        java.util.regex.Matcher matcher = SOP_FOLDER_PATTERN.matcher(sourceFilePath);
+        if (!matcher.find()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Long.parseLong(matcher.group(1)));
+        } catch (NumberFormatException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<String> extractSopFolderLabelFromPath(String sourceFilePath) {
+        if (sourceFilePath == null || sourceFilePath.trim().isEmpty()) {
+            return Optional.empty();
+        }
+        String normalized = sourceFilePath.replace('\\', '/');
+        String[] segments = normalized.split("/");
+        for (int i = 0; i < segments.length - 2; i++) {
+            String current = segments[i];
+            String child = segments[i + 1];
+            if (current == null || child == null || current.trim().isEmpty()) {
+                continue;
+            }
+            String upperChild = child.trim().toUpperCase();
+            if ("IN_SOP".equals(upperChild) || "OUT_SOP".equals(upperChild)) {
+                return Optional.of(current.trim().replace('_', ' '));
+            }
+        }
+        return Optional.empty();
+    }
+
+    private long ensureSopExistsFromPath(Long sopId, String sourceFilePath, String flow) {
+        if (sopRepository.findById(sopId).isPresent()) {
+            return sopId;
+        }
+        Sop sop = new Sop();
+        sop.setId(sopId);
+        sop.setLibelleSop(extractSopLibelleFromPath(sourceFilePath, sopId));
+        sopRepository.save(sop);
+        log.warn("{}: SOP auto-créé depuis dossier: id={}, libelle='{}'", flow, sopId, sop.getLibelleSop());
+        return sopId;
+    }
+
+    private String extractSopLibelleFromPath(String sourceFilePath, Long sopId) {
+        if (sourceFilePath != null) {
+            java.util.regex.Matcher matcher = SOP_FOLDER_PATTERN.matcher(sourceFilePath);
+            if (matcher.find()) {
+                String labelPart = matcher.group(2);
+                if (labelPart != null && !labelPart.trim().isEmpty()) {
+                    return labelPart.replace('_', ' ').trim();
+                }
+            }
+        }
+        return "SOP " + sopId;
     }
 
     private String extractFirstSopBusinessValue(String xml) {
@@ -645,7 +728,6 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
 
     private void ensureReferenceDataExists() {
         ensureDefaultAdresseExists();
-        ensureDefaultSopExists();
         StringBuilder missing = new StringBuilder();
         if (!statutRepository.findById(DEFAULT_ID_STATUT).isPresent()) missing.append(" statut(id=1)");
         if (!typeMessageRepository.findById(CODE_MSG_PACS008).isPresent()) missing.append(" type_message(code_msg=1)");
@@ -669,17 +751,6 @@ public class Iso20022MessageServiceImpl implements Iso20022MessageService {
         adresse.setPays("MA");
         adresseRepository.save(adresse);
         log.warn("Référence auto-créée: adresse(id={})", DEFAULT_ID_ADRESSE);
-    }
-
-    private void ensureDefaultSopExists() {
-        if (sopRepository.findById(DEFAULT_ID_SOP).isPresent()) {
-            return;
-        }
-        Sop sop = new Sop();
-        sop.setId(DEFAULT_ID_SOP);
-        sop.setLibelleSop("SOP PAR DEFAUT");
-        sopRepository.save(sop);
-        log.warn("Référence auto-créée: sop(id={})", DEFAULT_ID_SOP);
     }
 
     private static String extractBicCodeFromPacs008(MxPacs00800108 mx) {

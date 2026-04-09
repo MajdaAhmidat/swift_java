@@ -10,7 +10,6 @@ import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -39,14 +38,15 @@ public class MxAckScheduler {
         String baseDir = getBaseDirectory();
         log.info("[MxAckScheduler] Polling des dossiers (base={})", baseDir);
 
-        // 1) SOP (.xml) - IN_SOP : traiter et enregistrer en base, puis FILESAVE / ERRORLOGS
+        // 1) SOP (.xml) - dossiers configurés dans application.properties (input.mx.directory)
         List<String> mxDirs = PropertiesLoader.getDirectories("input.mx.directory");
-        if (mxDirs == null || mxDirs.isEmpty()) {
-            String pathIn = PropertiesLoader.getProperty("swift.app.path.in");
-            String dirName = (pathIn != null && !pathIn.trim().isEmpty()) ? pathIn.trim() : "IN_SOP";
-            mxDirs = Collections.singletonList(new File(baseDir, dirName).getAbsolutePath());
-        } else {
+        if (mxDirs != null && !mxDirs.isEmpty()) {
             mxDirs = toAbsolutePaths(mxDirs, baseDir);
+            mxDirs = keepExistingDirectories(mxDirs);
+        }
+        if (mxDirs == null || mxDirs.isEmpty()) {
+            log.warn("[MxAckScheduler] Aucun dossier IN_SOP configuré/trouvé (input.mx.directory).");
+            return;
         }
         log.info("[MxAckScheduler] Traitement SOP .xml dans: {}", mxDirs);
         documentProcessorService.processDocuments(mxDirs, MessageStandardType.MX);
@@ -69,13 +69,12 @@ public class MxAckScheduler {
             return new File(base.trim()).getAbsolutePath();
         }
         String userDir = new File(System.getProperty("user.dir")).getAbsolutePath();
-        if (new File(userDir, "IN").exists()) {
+        if (new File(userDir, "SAA").exists()) {
             return userDir;
         }
-        // IDE lance depuis le dossier père (ex. monitoring) → user.dir = père, IN est dans swift_fin
         File swiftFin = new File(userDir, "swift_fin");
-        if (new File(swiftFin, "IN").exists()) {
-            log.info("[MxAckScheduler] IN trouvé sous user.dir/swift_fin (lancement depuis dossier père)");
+        if (new File(swiftFin, "SAA").exists()) {
+            log.info("[MxAckScheduler] Dossiers trouvés sous user.dir/swift_fin");
             return swiftFin.getAbsolutePath();
         }
         return userDir;
@@ -89,5 +88,17 @@ public class MxAckScheduler {
         }
         return out;
     }
+
+    private static List<String> keepExistingDirectories(List<String> dirs) {
+        List<String> out = new ArrayList<>();
+        for (String d : dirs) {
+            File f = new File(d);
+            if (f.exists() && f.isDirectory()) {
+                out.add(f.getAbsolutePath());
+            }
+        }
+        return out;
+    }
+
 }
 

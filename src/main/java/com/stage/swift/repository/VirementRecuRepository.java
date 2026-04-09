@@ -39,4 +39,12 @@ public interface VirementRecuRepository extends JpaRepository<VirementRecu, Vire
     @Modifying
     @Query(value = "UPDATE swift.virement_recu SET id_adresse = :idAdresse WHERE id_vrt_recu = :idVrtRecu", nativeQuery = true)
     int updateAdresseByIdVrtRecu(@Param("idVrtRecu") Long idVrtRecu, @Param("idAdresse") Long idAdresse);
+
+    @Modifying
+    @Query(value = "UPDATE swift.virement_recu SET id_sop = :newSop WHERE id_vrt_recu = :idVrtRecu", nativeQuery = true)
+    int updateSopByIdVrtRecu(@Param("idVrtRecu") Long idVrtRecu, @Param("newSop") Long newSop);
+
+    @Modifying
+    @Query(value = "UPDATE swift.virement_recu SET statut_rapprochement = :statut WHERE id_vrt_recu = :idVrtRecu", nativeQuery = true)
+    int updateStatutRapprochementByIdVrtRecu(@Param("idVrtRecu") Long idVrtRecu, @Param("statut") String statut);
 }
